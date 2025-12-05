@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily Scraper Scheduler Timer
+Requires=scraper-scheduler.service
+
+[Timer]
+OnCalendar=daily
+OnCalendar=02:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+

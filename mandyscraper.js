@@ -22,7 +22,7 @@ const WEBHOOK_URL =
   "https://manikinagency.app.n8n.cloud/webhook/a0586890-2134-4a91-99f9-1be0884d5c68";
 
 (async () => {
-  const browser = await chromium.launch({ headless: false });
+  const browser = await chromium.launch({ headless: true });
   const ctx = await browser.newContext({
     userAgent: randomUA(),
     viewport: { width: 1200, height: 900 },
