@@ -37,7 +37,9 @@ const WEBHOOK_URL =
   const sendWebhook = async (data, label = "") => {
     if (!data.length)
       return console.log(`No data to send ${label ? `for ${label}` : ""}.`);
-    console.log(`Sending ${data.length} records ${label ? `(${label})` : ""} to webhook...`);
+    console.log(
+      `Sending ${data.length} records ${label ? `(${label})` : ""} to webhook...`
+    );
     try {
       await axios.post(WEBHOOK_URL, { data }, { headers: { "Content-Type": "application/json" } });
       console.log("Data sent successfully!");
@@ -99,7 +101,7 @@ const WEBHOOK_URL =
           await detailPage.goto(item.link, { waitUntil: "domcontentloaded", timeout: 45000 });
           await sleep(1500);
 
-          // CLICK ALL DROPDOWNS BEFORE SCRAPING (REAL PLAYWRIGHT CLICKS)
+          // CLICK ALL DROPDOWNS BEFORE SCRAPING
           try {
             const dropdowns = await detailPage.$$("#production-roles .role-group__summary");
             for (const dd of dropdowns) {
@@ -122,6 +124,28 @@ const WEBHOOK_URL =
             let deadline = "ASAP";
             const deadlineEl = document.querySelector(".expires-text--date");
             if (deadlineEl) deadline = deadlineEl.innerText.trim();
+
+            const datesAndLocationsEl =
+              document.querySelector(".prod-listing__details p span.Linkify") ||
+              document.querySelector(".prod-listing__details span.Linkify") ||
+              document.querySelector(".prod-listing__details .Linkify");
+
+            let datesAndLocations = "N/A";
+            let shoot_date = "N/A";
+            let shoot_location = "N/A";
+
+            if (datesAndLocationsEl) {
+              datesAndLocations = datesAndLocationsEl.innerText.trim();
+
+              // Extract date (example: "Records between now and 10 Dec.")
+              const dateMatch = datesAndLocations.match(/between now and\s*(.+?)(\.|$)/i);
+              if (dateMatch) shoot_date = dateMatch[1].trim();
+
+              // Default to page location
+              shoot_location =
+                document.querySelector(".prod-listing__details.submission-details div")
+                  ?.innerText.trim() || "N/A";
+            }
 
             const roles = [];
             const roleBlocks = document.querySelectorAll(
@@ -146,7 +170,6 @@ const WEBHOOK_URL =
 
               const genderMatch = text.match(/Male|Female|All Genders|Any Gender|Non-binary|Trans/i);
 
-              // Extract pay if visible in this listing
               let pay = "N/A";
               const payEl = r.querySelector(".compensation.role_compensation .payment__estimated");
               if (payEl) {
@@ -165,7 +188,7 @@ const WEBHOOK_URL =
               });
             }
 
-            return { projectName, deadline, location, roles };
+            return { projectName, deadline, location, datesAndLocations, roles, shoot_date, shoot_location, };
           });
 
           // VISIT EACH ROLE URL TO EXTRACT PAY IF NEEDED
@@ -210,6 +233,9 @@ const WEBHOOK_URL =
             posted: item.posted || "N/A",
             deadline: detail.deadline || "ASAP",
             location: detail.location || item.location || "N/A",
+            datesAndLocations: detail.datesAndLocations || "N/A",
+            shoot_date: detail.datesAndLocations || "N/A", // ADD THIS
+            shoot_location: detail.location || item.location || "N/A", // ADD THIS
             roles: detail.roles,
           });
 
