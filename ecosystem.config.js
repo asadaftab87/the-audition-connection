@@ -18,6 +18,23 @@ module.exports = {
       merge_logs: true,
       // Note: Use system cron or PM2 cron mode to schedule
       // PM2 cron: pm2 start ecosystem.config.js --only scraper-scheduler --cron "0 2 * * *"
+      // For EC2: Use system cron (crontab) instead of PM2 cron for better reliability
+    },
+    {
+      name: "listener",
+      script: "listener.js",
+      instances: 1,
+      exec_mode: "fork",
+      autorestart: true,
+      watch: false,
+      max_memory_restart: "500M",
+      env: {
+        NODE_ENV: "production",
+        PORT: 4000,
+      },
+      error_file: "./logs/listener-pm2-error.log",
+      out_file: "./logs/listener-pm2-out.log",
+      time: true,
     },
     // Individual scrapers (optional - if you want to run them separately)
     {
