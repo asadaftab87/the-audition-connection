@@ -20,7 +20,7 @@ const BASE_URL = "https://www.backstage.com/casting/?compensation_field=T&compen
 const WEBHOOK_URL = "https://manikinagency.app.n8n.cloud/webhook/a0586890-2134-4a91-99f9-1be0884d5c68";
 
 (async () => {
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({ headless: false });
   const ctx = await browser.newContext({
     userAgent: randomUA(),
     viewport: { width: 1200, height: 900 },
@@ -35,7 +35,6 @@ const WEBHOOK_URL = "https://manikinagency.app.n8n.cloud/webhook/a0586890-2134-4
   let stopped = false;
   let isAborted = false;
 
-  // webhook sender
   const sendWebhook = async (data, label = "") => {
     if (!data.length) return console.log(`No data to send ${label ? `for ${label}` : ""}.`);
     console.log(`\nSending ${data.length} records ${label ? `(${label})` : ""} to webhook...`);
@@ -47,7 +46,6 @@ const WEBHOOK_URL = "https://manikinagency.app.n8n.cloud/webhook/a0586890-2134-4
     }
   };
 
-  // graceful exit
   process.on("SIGINT", async () => {
     if (isAborted) return;
     isAborted = true;
@@ -64,7 +62,6 @@ const WEBHOOK_URL = "https://manikinagency.app.n8n.cloud/webhook/a0586890-2134-4
     process.exit(0);
   });
 
-  // main loop
   while (currentPage <= totalPages && !stopped) {
     console.log(`\n--- Scraping page ${currentPage}/${totalPages} ---`);
     const url = `${BASE_URL}${currentPage}`;
@@ -164,10 +161,7 @@ const WEBHOOK_URL = "https://manikinagency.app.n8n.cloud/webhook/a0586890-2134-4
           for (const sel of expandAllSelectors) {
             const buttons = await p.$$(sel);
             for (const btn of buttons) {
-              try {
-                await btn.click();
-                await sleep(400);
-              } catch { }
+              try { await btn.click(); await sleep(400); } catch {}
             }
           }
 
@@ -176,11 +170,13 @@ const WEBHOOK_URL = "https://manikinagency.app.n8n.cloud/webhook/a0586890-2134-4
           const detail = await p.evaluate(() => {
             const getText = (sel) => document.querySelector(sel)?.innerText?.trim() || "";
             const projectName = getText(".prod-listing__header h1") || getText("h1") || "";
-            const posted =
-              getText(".meta-updated, .listing__meta .date, .posted, [data-testid='posted']") || "";
+            const posted = getText(".meta-updated, .listing__meta .date, .posted, [data-testid='posted']") || "";
             const deadline = getText(".expires-text--date") || "";
 
             let location = "";
+            let shoot_date = "";
+            let shoot_location = "";
+
             const seekEl = Array.from(document.querySelectorAll("div,p,span")).find((el) =>
               /Seeking talent/i.test(el.innerText || "")
             );
@@ -188,36 +184,35 @@ const WEBHOOK_URL = "https://manikinagency.app.n8n.cloud/webhook/a0586890-2134-4
               const m = seekEl.innerText.match(/Seeking talent (from|in)\s*(.+)/i);
               if (m) location = m[2].trim();
             }
-            if (!location) {
-              const datesBlock = Array.from(document.querySelectorAll("div,p")).find((el) =>
-                /Dates & Locations|Dates and Locations|Dates:/i.test(el.innerText || "")
-              );
-              if (datesBlock) {
-                const m = datesBlock.innerText.match(/(?:in|from)\s+([A-Za-z0-9 ,]+)/i);
-                if (m) location = m[1].trim();
+
+            // Parse Dates & Locations
+            const datesBlock = Array.from(document.querySelectorAll("div,p")).find((el) =>
+              /Dates & Locations|Dates and Locations|Dates:/i.test(el.innerText || "")
+            );
+            if (datesBlock) {
+              const text = datesBlock.innerText.replace(/<[^>]+>/g, "").trim();
+              const match = text.match(/Shoots\s+(.*?)\s+in\s+(.+)/i);
+              if (match) {
+                shoot_date = match[1].trim();
+                shoot_location = match[2].trim();
+              } else {
+                const fallbackMatch = text.match(/between\s+now\s+and\s+([0-9A-Za-z\s.,]+)/i);
+                if (fallbackMatch) shoot_date = fallbackMatch[1].trim();
               }
             }
 
+            if (!location) location = shoot_location || "";
+
             const roles = [];
             const roleBlocks = Array.from(
-              document.querySelectorAll(
-                "#production-roles .role-group, [data-testid='role-group'], .role-details, .casting-call-role"
-              )
+              document.querySelectorAll("#production-roles .role-group, [data-testid='role-group'], .role-details, .casting-call-role")
             );
             for (const r of roleBlocks) {
-              const name =
-                r.querySelector(".name, h5, h4, .role-header__title, [data-testid='role-title']")
-                  ?.innerText?.trim() || "Unnamed Role";
-              const applyLink =
-                r.querySelector("a.role-group__open, a[href*='/casting/']")?.href ||
-                window.location.href;
+              const name = r.querySelector(".name, h5, h4, .role-header__title, [data-testid='role-title']")?.innerText?.trim() || "Unnamed Role";
+              const applyLink = r.querySelector("a.role-group__open, a[href*='/casting/']")?.href || window.location.href;
               const textContent = r.innerText || "";
-              const ageMatch = textContent.match(
-                /([0-9]{1,2}\s*-\s*[0-9]{1,2}|[0-9]{1,2}\s*Years|[0-9]{1,2}\+|[0-9]{1,2}s)/i
-              );
-              const genderMatch = textContent.match(
-                /\b(Male|Female|All Genders|Non-binary|Any Gender)\b/i
-              );
+              const ageMatch = textContent.match(/([0-9]{1,2}\s*-\s*[0-9]{1,2}|[0-9]{1,2}\s*Years|[0-9]{1,2}\+|[0-9]{1,2}s)/i);
+              const genderMatch = textContent.match(/\b(Male|Female|All Genders|Non-binary|Any Gender)\b/i);
               const payMatch = textContent.match(/(?:Rate|Total Pay)[:\s]*([A-Za-z$0-9.,]+)/i);
 
               roles.push({
@@ -229,21 +224,16 @@ const WEBHOOK_URL = "https://manikinagency.app.n8n.cloud/webhook/a0586890-2134-4
               });
             }
 
-            return { projectName, posted, deadline, location, roles };
+            return { projectName, posted, deadline, location, shoot_date, shoot_location, roles };
           });
 
           if (item.location) detail.location = item.location;
 
           console.log(`\n[${i + 1}/${listings.length}] ${detail.projectName}`);
-          console.log(
-            `Location: ${detail.location || "N/A"} | Posted: ${detail.posted || item.posted || "N/A"
-            } | Deadline: ${detail.deadline || "N/A"}`
-          );
+          console.log(`Location: ${detail.location || "N/A"} | Posted: ${detail.posted || item.posted || "N/A"} | Deadline: ${detail.deadline || "N/A"} | Shoot: ${detail.shoot_date} at ${detail.shoot_location}`);
 
           detail.roles.forEach((r, idx) =>
-            console.log(
-              `  → Role ${idx + 1}: ${r.roleName} | Age: ${r.age_range} | Gender: ${r.gender} | Pay: ${r.pay} | Apply: ${r.apply_link}`
-            )
+            console.log(`  → Role ${idx + 1}: ${r.roleName} | Age: ${r.age_range} | Gender: ${r.gender} | Pay: ${r.pay} | Apply: ${r.apply_link}`)
           );
 
           pageResults.push({
@@ -252,6 +242,8 @@ const WEBHOOK_URL = "https://manikinagency.app.n8n.cloud/webhook/a0586890-2134-4
             posted: detail.posted || item.posted || null,
             deadline: detail.deadline || null,
             location: detail.location || item.location || null,
+            shoot_date: detail.shoot_date,
+            shoot_location: detail.shoot_location,
             roles: detail.roles || [],
           });
         } catch (err) {
@@ -261,7 +253,6 @@ const WEBHOOK_URL = "https://manikinagency.app.n8n.cloud/webhook/a0586890-2134-4
         }
       }
 
-      // Send results for this page immediately
       await sendWebhook(pageResults, `page ${currentPage}`);
 
       currentPage++;
@@ -276,4 +267,3 @@ const WEBHOOK_URL = "https://manikinagency.app.n8n.cloud/webhook/a0586890-2134-4
   await browser.close();
   console.log("Done.");
 })();
- 

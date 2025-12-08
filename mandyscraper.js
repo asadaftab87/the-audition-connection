@@ -22,7 +22,7 @@ const WEBHOOK_URL =
   "https://manikinagency.app.n8n.cloud/webhook/a0586890-2134-4a91-99f9-1be0884d5c68";
 
 (async () => {
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({ headless: false });
   const ctx = await browser.newContext({
     userAgent: randomUA(),
     viewport: { width: 1200, height: 900 },
@@ -156,8 +156,11 @@ const WEBHOOK_URL =
             const posted = getText(".meta-updated, .listing__meta .date, .posted, [data-testid='posted']") || "";
             const deadline = getText(".expires-text--date") || "";
 
-            // --- DETAIL PAGE LOCATION ---
+            // --- DETAIL PAGE LOCATION & SHOOT INFO ---
             let location = "";
+            let shoot_date = "";
+            let shoot_location = "";
+
             const seekEl = Array.from(document.querySelectorAll("div,p,span")).find(el =>
               /Seeking talent/i.test(el.innerText || "")
             );
@@ -165,15 +168,23 @@ const WEBHOOK_URL =
               const m = seekEl.innerText.match(/Seeking talent (from|in)\s*(.+)/i);
               if (m) location = m[2].trim();
             }
-            if (!location) {
-              const datesBlock = Array.from(document.querySelectorAll("div,p")).find(el =>
-                /Dates & Locations|Dates and Locations|Dates:/i.test(el.innerText || "")
-              );
-              if (datesBlock) {
-                const m = datesBlock.innerText.match(/(?:in|from)\s+([A-Za-z0-9 ,]+)/i);
-                if (m) location = m[1].trim();
-              }
+
+            const datesBlock = document.querySelector(".prod-listing__details p span.Linkify");
+            if (datesBlock) {
+              const text = datesBlock.innerText.trim();
+              const match = text.match(/Records between now and\s+(.+)/i);
+              if (match) shoot_date = match[1].trim();
             }
+
+            if (!location) {
+              const locationMatch = Array.from(document.querySelectorAll(".prod-listing__details p span.Linkify"))
+                .map(el => el.innerText)
+                .join(" ")
+                .match(/in\s+([A-Za-z ,]+)/i);
+              if (locationMatch) shoot_location = locationMatch[1].trim();
+            }
+
+            if (!location) location = shoot_location;
 
             const roles = [];
             const roleBlocks = Array.from(
@@ -203,15 +214,14 @@ const WEBHOOK_URL =
               });
             }
 
-            return { projectName, posted, deadline, location, roles };
+            return { projectName, posted, deadline, location, shoot_date, shoot_location, roles };
           });
 
-          // fallback to main page location if detail page doesn't have it
           if (!detail.location && item.location) detail.location = item.location;
 
           console.log(`\n[${i + 1}/${listings.length}] ${detail.projectName}`);
           console.log(
-            `Location: ${detail.location || "N/A"} | Posted: ${detail.posted || item.posted || "N/A"} | Deadline: ${detail.deadline || "N/A"}`
+            `Location: ${detail.location || "N/A"} | Posted: ${detail.posted || item.posted || "N/A"} | Deadline: ${detail.deadline || "N/A"} | Shoot: ${detail.shoot_date} at ${detail.shoot_location}`
           );
 
           detail.roles.forEach((r, idx) =>
@@ -226,6 +236,8 @@ const WEBHOOK_URL =
             posted: detail.posted || item.posted || null,
             deadline: detail.deadline || null,
             location: detail.location || item.location || null,
+            shoot_date: detail.shoot_date,
+            shoot_location: detail.shoot_location,
             roles: detail.roles || [],
           });
         } catch (err) {
