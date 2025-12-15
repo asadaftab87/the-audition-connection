@@ -1,11 +1,185 @@
 import { chromium } from "playwright";
 import axios from "axios";
+import { parse, isFuture, subDays, subHours } from "date-fns";
+import { Country, State, City } from "country-state-city";
+
 
 const USER_AGENTS = [
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Safari/605.1.15",
   "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
 ];
+
+
+// -----------------------------
+// NORMALIZE POSTED DATE
+// -----------------------------
+function normalizePosted(raw) {
+  if (!raw) return null;
+  raw = raw.toLowerCase().trim();
+  const now = new Date();
+
+  if (raw.includes("today")) return now.toISOString();
+  if (raw.includes("yesterday")) return subDays(now, 1).toISOString();
+
+  const hr = raw.match(/(\d+)\s*hour/);
+  if (hr) return subHours(now, parseInt(hr[1])).toISOString();
+
+  const d = raw.match(/(\d+)\s*day/);
+  if (d) return subDays(now, parseInt(d[1])).toISOString();
+
+  const parsedShort = parse(raw, "d MMM", now);
+  if (!isNaN(parsedShort)) {
+    parsedShort.setFullYear(now.getFullYear());
+    if (isFuture(parsedShort)) parsedShort.setFullYear(now.getFullYear() - 1);
+    return parsedShort.toISOString();
+  }
+
+  const dt = new Date(raw);
+  if (!isNaN(dt)) return dt.toISOString();
+
+  return null;
+}
+
+// -----------------------------
+// NORMALIZE DEADLINE DATE
+// -----------------------------
+function normalizeDeadline(raw) {
+  if (!raw) return null;
+  raw = raw.trim();
+
+  // Try parsing directly
+  let dt = new Date(raw);
+  if (!isNaN(dt)) return dt.toISOString();
+
+  // Try parse using date-fns with time
+  const parsedWithTime = parse(raw, "MMMM d, yyyy HH:mm", new Date());
+  if (!isNaN(parsedWithTime)) return parsedWithTime.toISOString();
+
+  // Try parse using date-fns without time
+  const parsedWithoutTime = parse(raw, "MMMM d, yyyy", new Date());
+  if (!isNaN(parsedWithoutTime)) return parsedWithoutTime.toISOString();
+
+  return null;
+}
+
+
+
+// Map US state codes to full names
+const US_STATES = {
+  "AL": "Alabama", "AK": "Alaska", "AZ": "Arizona", "AR": "Arkansas", "CA": "California",
+  "CO": "Colorado", "CT": "Connecticut", "DE": "Delaware", "FL": "Florida", "GA": "Georgia",
+  "HI": "Hawaii", "ID": "Idaho", "IL": "Illinois", "IN": "Indiana", "IA": "Iowa",
+  "KS": "Kansas", "KY": "Kentucky", "LA": "Louisiana", "ME": "Maine", "MD": "Maryland",
+  "MA": "Massachusetts", "MI": "Michigan", "MN": "Minnesota", "MS": "Mississippi",
+  "MO": "Missouri", "MT": "Montana", "NE": "Nebraska", "NV": "Nevada", "NH": "New Hampshire",
+  "NJ": "New Jersey", "NM": "New Mexico", "NY": "New York", "NC": "North Carolina",
+  "ND": "North Dakota", "OH": "Ohio", "OK": "Oklahoma", "OR": "Oregon", "PA": "Pennsylvania",
+  "RI": "Rhode Island", "SC": "South Carolina", "SD": "South Dakota", "TN": "Tennessee",
+  "TX": "Texas", "UT": "Utah", "VT": "Vermont", "VA": "Virginia", "WA": "Washington",
+  "WV": "West Virginia", "WI": "Wisconsin", "WY": "Wyoming", "DC": "District of Columbia"
+};
+
+function splitLocation(raw) {
+  if (!raw) return { city: "N/A", state: "N/A", country: "N/A" };
+
+  // Split by comma
+  const parts = raw.split(",").map(p => p.trim());
+
+  let city = "N/A";
+  let state = "N/A";
+  let country = "N/A";
+
+  if (parts.length === 1) {
+    // Maybe country only
+    const countryObj = Country.getAllCountries().find(c =>
+      c.name.toLowerCase() === parts[0].toLowerCase() || c.isoCode.toLowerCase() === parts[0].toLowerCase()
+    );
+    if (countryObj) country = countryObj.name;
+  } else if (parts.length === 2) {
+    // City, State (assume USA if state matches)
+    city = parts[0];
+    const stateObj = State.getStatesOfCountry("US").find(s =>
+      s.isoCode.toLowerCase() === parts[1].toLowerCase() || s.name.toLowerCase() === parts[1].toLowerCase()
+    );
+    if (stateObj) {
+      state = stateObj.name;
+      country = "United States";
+    } else {
+      state = parts[1];
+      country = "N/A";
+    }
+  } else if (parts.length >= 3) {
+    // City, State, Country
+    city = parts[0];
+    state = parts[1];
+    const countryObj = Country.getAllCountries().find(c =>
+      c.name.toLowerCase() === parts[2].toLowerCase() || c.isoCode.toLowerCase() === parts[2].toLowerCase()
+    );
+    country = countryObj ? countryObj.name : parts[2];
+  }
+
+  // Extra: try to validate city using the package
+  if (country !== "N/A") {
+    const countryObj = Country.getAllCountries().find(c => c.name === country);
+    if (countryObj && state !== "N/A") {
+      const stateObj = State.getStatesOfCountry(countryObj.isoCode).find(s => s.name === state);
+      if (stateObj) {
+        const cityObj = City.getCitiesOfState(countryObj.isoCode, stateObj.isoCode)
+          .find(c => c.name.toLowerCase() === city.toLowerCase());
+        if (cityObj) city = cityObj.name;
+      }
+    }
+  }
+
+  return { city, state, country };
+}
+
+
+// -----------------------------
+// NORMALIZE AGE RANGE
+// -----------------------------
+function normalizeAge(raw) {
+  if (!raw) return "N/A";
+  raw = raw.trim();
+
+  // 18+, 4+, 20+, etc.
+  const plusMatch = raw.match(/^(\d{1,2})\+$/);
+  if (plusMatch) return `${plusMatch[1]}+`;
+
+  // 18-25, 51 - 70
+  const rangeMatch = raw.match(/(\d{1,2})\s*-\s*(\d{1,3})/);
+  if (rangeMatch) return `${rangeMatch[1]} - ${rangeMatch[2]}`;
+
+  // Single number (like "18 Years")
+  const numMatch = raw.match(/(\d{1,2})/);
+  if (numMatch) return numMatch[1] + "+";
+
+  // Fallback
+  return raw;
+}
+
+// -----------------------------
+// SPLIT AGE INTO MIN/MAX
+// -----------------------------
+function splitAgeRange(raw) {
+  if (!raw || raw.toLowerCase() === "n/a") return { min_age: null, max_age: null };
+
+  const rangeMatch = raw.match(/(\d{1,2})\s*-\s*(\d{1,3})/);
+  if (rangeMatch) {
+    return { min_age: parseInt(rangeMatch[1]), max_age: parseInt(rangeMatch[2]) };
+  }
+
+  const plusMatch = raw.match(/^(\d{1,2})\+$/);
+  if (plusMatch) {
+    return { min_age: parseInt(plusMatch[1]), max_age: 100 };
+  }
+
+  const numMatch = raw.match(/(\d{1,2})/);
+  if (numMatch) return { min_age: parseInt(numMatch[1]), max_age: 100 };
+
+  return { min_age: null, max_age: null };
+}
 
 function randomUA() {
   return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
@@ -19,10 +193,10 @@ const BASE_URL = "https://www.backstage.com/casting/?compensation_field=T&compen
 
 const WEBHOOK_URL = "https://manikinagency.app.n8n.cloud/webhook/a0586890-2134-4a91-99f9-1be0884d5c68";
 
+// ... your imports, constants, normalizePosted, normalizeDeadline, splitLocation, normalizeAge, splitAgeRange, randomUA, sleep remain unchanged
+
 (async () => {
-  // Use headless mode on EC2 (production) or when HEADLESS env var is set
-  const isHeadless = process.env.NODE_ENV === 'production' || process.env.HEADLESS === 'true';
-  const browser = await chromium.launch({ headless: isHeadless });
+  const browser = await chromium.launch({ headless: true  });
   const ctx = await browser.newContext({
     userAgent: randomUA(),
     viewport: { width: 1200, height: 900 },
@@ -78,6 +252,7 @@ const WEBHOOK_URL = "https://manikinagency.app.n8n.cloud/webhook/a0586890-2134-4
         (cards) => {
           const out = [];
           const badWords = [/post a job/i, /find jobs/i, /join now/i, /save job/i, /become a backstage member/i];
+
           for (const card of cards) {
             const heading =
               card.querySelector("h3 a, h2 a, a[href*='/casting/'].card-title, a.card__title") ||
@@ -97,8 +272,7 @@ const WEBHOOK_URL = "https://manikinagency.app.n8n.cloud/webhook/a0586890-2134-4
               const locText = locationEl.innerText.trim();
               const match = locText.match(/Nationwide|Worldwide|Remote/i);
               location = match ? match[0] : locText;
-            }
-            else {
+            } else {
               const txt = Array.from(card.querySelectorAll("*"))
                 .map((el) => el.innerText || "")
                 .join(" | ");
@@ -126,7 +300,12 @@ const WEBHOOK_URL = "https://manikinagency.app.n8n.cloud/webhook/a0586890-2134-4
               if (m) posted = m[1].trim();
             }
 
-            out.push({ title: rawTitle, link, location, posted: posted || null });
+            out.push({
+              title: rawTitle,
+              link,
+              location,
+              posted: posted || null
+            });
           }
 
           const seen = new Set();
@@ -138,6 +317,7 @@ const WEBHOOK_URL = "https://manikinagency.app.n8n.cloud/webhook/a0586890-2134-4
 
       for (let i = 0; i < listings.length; i++) {
         const item = listings[i];
+
         const context = await browser.newContext({
           userAgent: randomUA(),
           viewport: { width: 1200, height: 900 },
@@ -163,7 +343,7 @@ const WEBHOOK_URL = "https://manikinagency.app.n8n.cloud/webhook/a0586890-2134-4
           for (const sel of expandAllSelectors) {
             const buttons = await p.$$(sel);
             for (const btn of buttons) {
-              try { await btn.click(); await sleep(400); } catch {}
+              try { await btn.click(); await sleep(400); } catch { }
             }
           }
 
@@ -187,7 +367,6 @@ const WEBHOOK_URL = "https://manikinagency.app.n8n.cloud/webhook/a0586890-2134-4
               if (m) location = m[2].trim();
             }
 
-            // Parse Dates & Locations
             const datesBlock = Array.from(document.querySelectorAll("div,p")).find((el) =>
               /Dates & Locations|Dates and Locations|Dates:/i.test(el.innerText || "")
             );
@@ -213,14 +392,17 @@ const WEBHOOK_URL = "https://manikinagency.app.n8n.cloud/webhook/a0586890-2134-4
               const name = r.querySelector(".name, h5, h4, .role-header__title, [data-testid='role-title']")?.innerText?.trim() || "Unnamed Role";
               const applyLink = r.querySelector("a.role-group__open, a[href*='/casting/']")?.href || window.location.href;
               const textContent = r.innerText || "";
-              const ageMatch = textContent.match(/([0-9]{1,2}\s*-\s*[0-9]{1,2}|[0-9]{1,2}\s*Years|[0-9]{1,2}\+|[0-9]{1,2}s)/i);
+              const ageMatch = textContent.match(/([0-9]{1,2}\s*-\s*[0-9]{1,2}|[0-9]{1,2}\+|[0-9]{1,2}s|[0-9]{1,2}\s*Years)/i);
               const genderMatch = textContent.match(/\b(Male|Female|All Genders|Non-binary|Any Gender)\b/i);
               const payMatch = textContent.match(/(?:Rate|Total Pay)[:\s]*([A-Za-z$0-9.,]+)/i);
+
+              let age = ageMatch ? ageMatch[0] : "N/A";
+              if (age.toLowerCase() === "n/a") age = "N/A";
 
               roles.push({
                 roleName: name,
                 apply_link: applyLink,
-                age_range: ageMatch ? ageMatch[0] : "N/A",
+                age_range: age,
                 gender: genderMatch ? genderMatch[0] : "N/A",
                 pay: payMatch ? payMatch[1] : "N/A",
               });
@@ -231,23 +413,46 @@ const WEBHOOK_URL = "https://manikinagency.app.n8n.cloud/webhook/a0586890-2134-4
 
           if (item.location) detail.location = item.location;
 
-          console.log(`\n[${i + 1}/${listings.length}] ${detail.projectName}`);
-          console.log(`Location: ${detail.location || "N/A"} | Posted: ${detail.posted || item.posted || "N/A"} | Deadline: ${detail.deadline || "N/A"} | Shoot: ${detail.shoot_date} at ${detail.shoot_location}`);
+          // Split main location
+          const { city, state, country } = splitLocation(detail.location);
+          // Split shoot location
+          const { city: shoot_city, state: shoot_state, country: shoot_country } = splitLocation(detail.shoot_location);
 
+          // Normalize age and split into min_age/max_age for all roles
+          detail.roles = detail.roles.map(r => {
+            const normalized = normalizeAge(r.age_range);
+            const { min_age, max_age } = splitAgeRange(normalized);
+            return {
+              ...r,
+              age_range: normalized,
+              min_age,
+              max_age
+            };
+          });
+
+          console.log(`\n[${i + 1}/${listings.length}] ${detail.projectName}`);
+          console.log(`Location: ${city || "N/A"}, ${state || "N/A"}, ${country || "N/A"} | Posted: ${detail.posted || item.posted || "N/A"} | Deadline: ${detail.deadline || "N/A"} | Shoot: ${detail.shoot_date} at ${detail.shoot_location}`);
           detail.roles.forEach((r, idx) =>
-            console.log(`  → Role ${idx + 1}: ${r.roleName} | Age: ${r.age_range} | Gender: ${r.gender} | Pay: ${r.pay} | Apply: ${r.apply_link}`)
+            console.log(`  → Role ${idx + 1}: ${r.roleName} | Age: ${r.age_range} | Min: ${r.min_age} | Max: ${r.max_age} | Gender: ${r.gender} | Pay: ${r.pay} | Apply: ${r.apply_link}`)
           );
 
           pageResults.push({
             project: detail.projectName || item.title,
             source_url: item.link,
-            posted: detail.posted || item.posted || null,
-            deadline: detail.deadline || null,
+            posted: normalizePosted(detail.posted || item.posted || null),
+            deadline: normalizeDeadline(detail.deadline) || null,
             location: detail.location || item.location || null,
+            city,
+            state,
+            country,
             shoot_date: detail.shoot_date,
             shoot_location: detail.shoot_location,
+            shoot_city,
+            shoot_state,
+            shoot_country,
             roles: detail.roles || [],
           });
+
         } catch (err) {
           console.error("Error visiting detail page:", err.message);
         } finally {
@@ -255,7 +460,13 @@ const WEBHOOK_URL = "https://manikinagency.app.n8n.cloud/webhook/a0586890-2134-4
         }
       }
 
-      await sendWebhook(pageResults, `page ${currentPage}`);
+      await sendWebhook(
+        pageResults.map(p => ({
+          ...p,
+          posted: p.posted ? normalizePosted(p.posted) : null
+        })),
+        `page ${currentPage}`
+      );
 
       currentPage++;
     } catch (err) {

@@ -11,8 +11,111 @@ function randomUA() {
     return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
 }
 
+
 function sleep(ms) {
     return new Promise((r) => setTimeout(r, ms));
+}
+
+// ---------- HELPERS ----------
+function normalizePostedDate(raw) {
+    if (!raw || raw === "N/A") return "N/A";
+    const cleaned = raw.replace(/Posted:/i, "").trim().toLowerCase();
+    const now = new Date();
+    let m;
+
+    // Relative times
+    m = cleaned.match(/(\d+)\s*hour[s]?\s*ago/);
+    if (m) { now.setHours(now.getHours() - Number(m[1])); return now.toISOString().split("T")[0]; }
+
+    m = cleaned.match(/(\d+)\s*day[s]?\s*ago/);
+    if (m) { now.setDate(now.getDate() - Number(m[1])); return now.toISOString().split("T")[0]; }
+
+    if (cleaned.includes("yesterday")) { now.setDate(now.getDate() - 1); return now.toISOString().split("T")[0]; }
+    if (cleaned.includes("today")) return now.toISOString().split("T")[0];
+
+    // Weekdays (last occurrence)
+    const weekdayMap = { sun: 0, mon: 1, tue: 2, tues: 2, wed: 3, wedn: 3, thu: 4, thur: 4, thurs: 4, fri: 5, sat: 6 };
+    const mWeek = cleaned.match(/\b(sun(day)?|mon(day)?|tue(s)?|wed(nesday)?|thu(r(s)?)?|fri(day)?|sat(urday)?)\b/);
+    if (mWeek) {
+        const key = mWeek[1].slice(0, 3);
+        const targetDay = weekdayMap[key];
+        let diff = (new Date()).getDay() - targetDay;
+        if (diff <= 0) diff += 7;
+        now.setDate(now.getDate() - diff);
+        return now.toISOString().split("T")[0];
+    }
+
+    // Absolute dates
+    const d = new Date(cleaned);
+    if (!isNaN(d.getTime())) { if (d > new Date()) d.setFullYear(d.getFullYear() - 1); return d.toISOString().split("T")[0]; }
+
+    return raw.trim();
+}
+
+function normalizeDeadlineDate(raw) {
+    if (!raw || raw === "N/A") return "N/A";
+    const cleaned = raw.replace(/Deadline:/i, "").trim().toLowerCase();
+    const now = new Date();
+
+    // Weekdays (next occurrence)
+    const weekdayMap = { sun: 0, mon: 1, tue: 2, tues: 2, wed: 3, wedn: 3, thu: 4, thur: 4, thurs: 4, fri: 5, sat: 6 };
+    const mWeek = cleaned.match(/\b(sun(day)?|mon(day)?|tue(s)?|wed(nesday)?|thu(r(s)?)?|fri(day)?|sat(urday)?)\b/);
+    if (mWeek) {
+        const key = mWeek[1].slice(0, 3);
+        const targetDay = weekdayMap[key];
+        let diff = targetDay - now.getDay();
+        if (diff <= 0) diff += 7;
+        now.setDate(now.getDate() + diff);
+        return now.toISOString().split("T")[0];
+    }
+
+    // Absolute dates
+    const d = new Date(cleaned);
+    if (!isNaN(d.getTime())) return d.toISOString().split("T")[0]; // deadlines can be future
+
+    return raw.trim();
+}
+
+
+// Split "City, State, Country"
+function splitLocation(raw) {
+    if (!raw || raw === "N/A")
+        return { city: "N/A", state: "N/A", country: "N/A" };
+
+    const parts = raw.split(",").map(p => p.trim());
+
+    let city = "N/A", state = "N/A", country = "N/A";
+
+    if (parts.length === 1) {
+        country = parts[0];
+    } else if (parts.length === 2) {
+        city = parts[0];
+        state = parts[1];
+    } else if (parts.length >= 3) {
+        city = parts[0];
+        state = parts[1];
+        country = parts[2];
+    }
+
+    return { city, state, country };
+}
+
+// Split age into min & max
+function splitAge(ageRange) {
+    if (!ageRange || ageRange === "N/A")
+        return { min_age: "N/A", max_age: "N/A" };
+
+    const range = ageRange.match(/(\d{1,2})\s*-\s*(\d{1,2})/);
+    if (range) {
+        return { min_age: Number(range[1]), max_age: Number(range[2]) };
+    }
+
+    const plus = ageRange.match(/(\d{1,2})\+/);
+    if (plus) {
+        return { min_age: Number(plus[1]), max_age: "N/A" };
+    }
+
+    return { min_age: "N/A", max_age: "N/A" };
 }
 
 const BASE_URL =
@@ -21,9 +124,7 @@ const WEBHOOK_URL =
     "https://manikinagency.app.n8n.cloud/webhook/a0586890-2134-4a91-99f9-1be0884d5c68";
 
 (async () => {
-    // Use headless mode on EC2 (production) or when HEADLESS env var is set
-    const isHeadless = process.env.NODE_ENV === 'production' || process.env.HEADLESS === 'true';
-    const browser = await chromium.launch({ headless: isHeadless });
+    const browser = await chromium.launch({ headless: false });
     const context = await browser.newContext({
         userAgent: randomUA(),
         viewport: { width: 1200, height: 900 },
@@ -221,7 +322,7 @@ const WEBHOOK_URL =
 
                             // Step 6: fallback to first anything
                             uniq[0] || "N/A";
-                            
+
                         datesAndLocations = chosen;
 
                         // Parsing attempts:
@@ -313,13 +414,20 @@ const WEBHOOK_URL =
 
                         return {
                             projectName,
+
+                            // RAW
                             deadline,
                             location,
                             datesAndLocations,
-                            roles,
                             shoot_date,
                             shoot_location,
-                            _debug_candidates: uniq.slice(0, 5), // small sample of candidates used
+
+                            // NORMALIZED
+                            deadline_norm: deadline,
+
+                            roles,
+
+                            _debug_candidates: uniq.slice(0, 5),
                         };
                     });
 
@@ -368,21 +476,39 @@ const WEBHOOK_URL =
                         continue;
                     }
 
+                    const posted_norm = normalizePostedDate(item.posted);
+                    const deadline_norm = normalizeDeadlineDate(detail.deadline);
+
+
+                    const locSplit = splitLocation(detail.location || item.location);
+                    const shootSplit = splitLocation(detail.shoot_location);
+
                     pageResults.push({
                         project: detail.projectName || item.title,
                         source_url: item.link,
-                        posted: item.posted || "N/A",
-                        deadline: detail.deadline || "ASAP",
+
+                        posted: posted_norm,
+                        deadline: deadline_norm,
+
                         location: detail.location || item.location || "N/A",
-                        datesAndLocations: detail.datesAndLocations || "N/A",
+                        location_city: locSplit.city,
+                        location_state: locSplit.state,
+                        location_country: locSplit.country,
+
                         shoot_date: detail.shoot_date || "N/A",
                         shoot_location: detail.shoot_location || "N/A",
-                        roles: detail.roles,
-                        _debug: {
-                            candidates: detail._debug_candidates,
-                            parsed_date: detail.shoot_date,
-                            parsed_location: detail.shoot_location,
-                        },
+                        shoot_city: shootSplit.city,
+                        shoot_state: shootSplit.state,
+                        shoot_country: shootSplit.country,
+
+                        roles: detail.roles.map(r => {
+                            const { min_age, max_age } = splitAge(r.age_range);
+                            return {
+                                ...r,
+                                min_age,
+                                max_age,
+                            };
+                        }),
                     });
 
                     console.log(`\n[${i + 1}/${listings.length}] '${detail.projectName}'`);
