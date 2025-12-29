@@ -358,9 +358,18 @@ const WEBHOOK_URL =
                 const detailPage = await context.newPage();
 
                 try {
+                    console.log(`  → Scraping detail ${i + 1}/${listings.length}: ${item.link.substring(0, 60)}...`);
                     await detailPage.goto(item.link, { waitUntil: "domcontentloaded", timeout: 30000 });
-                    // Shorter wait - domcontentloaded already waited
-                    await sleep(IS_HEADLESS ? 2000 + Math.random() * 1000 : 1500 + Math.random() * 1000);
+                    // Longer wait for Linux/EC2 to ensure content loads
+                    await sleep(IS_HEADLESS ? 3000 + Math.random() * 2000 : 2000 + Math.random() * 1000);
+
+                    // Wait for main content to be visible
+                    try {
+                        await detailPage.waitForSelector(".prod-listing__header, .prod-listing__details", { timeout: 10000 });
+                        await sleep(1000);
+                    } catch (e) {
+                        console.log(`  ⚠️  Main content not found for ${item.link}`);
+                    }
 
                     // Expand role dropdowns
                     try {
@@ -368,10 +377,11 @@ const WEBHOOK_URL =
                         for (const dd of dropdowns) {
                             await dd.scrollIntoViewIfNeeded();
                             await dd.click();
-                            await sleep(300);
+                            await sleep(500);
                         }
+                        await sleep(1000); // Wait after expanding dropdowns
                     } catch (e) {
-                        console.log("Dropdown click error:", e.message);
+                        // Dropdowns might not exist, that's okay
                     }
 
                     const detail = await detailPage.evaluate(() => {
@@ -382,8 +392,23 @@ const WEBHOOK_URL =
                                 .replace(/\s+/g, " ")
                                 .trim();
 
-                        const projectName =
-                            norm(document.querySelector(".prod-listing__header h1")?.innerText || "");
+                        // Try multiple selectors for project name
+                        let projectName = "";
+                        const titleSelectors = [
+                            ".prod-listing__header h1",
+                            "h1.prod-listing__header",
+                            ".prod-listing__header h1.title",
+                            "h1",
+                            ".project-title",
+                            "[data-testid='project-title']"
+                        ];
+                        for (const selector of titleSelectors) {
+                            const el = document.querySelector(selector);
+                            if (el && el.innerText) {
+                                projectName = norm(el.innerText);
+                                if (projectName) break;
+                            }
+                        }
 
                         let location = "N/A";
                         const locEl = document.querySelector(".prod-listing__details.submission-details div");
