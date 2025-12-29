@@ -146,6 +146,10 @@ const WEBHOOK_URL =
             '--disable-features=IsolateOrigins,site-per-process',
             '--disable-infobars',
             '--window-size=1920,1080',
+            '--start-maximized',
+            '--disable-extensions',
+            '--disable-plugins-discovery',
+            '--disable-default-apps',
             ...(IS_HEADLESS ? ['--disable-gpu', '--disable-software-rasterizer'] : [])
         ]
     });
@@ -158,21 +162,82 @@ const WEBHOOK_URL =
         permissions: ['geolocation'],
         geolocation: { longitude: -74.006, latitude: 40.7128 },
         colorScheme: 'light',
+        // Add extra headers to look more like a real browser
+        extraHTTPHeaders: {
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'DNT': '1',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'Cache-Control': 'max-age=0',
+        },
     });
 
     await context.addInitScript(() => {
+        // Remove webdriver property
         Object.defineProperty(navigator, "webdriver", { get: () => false });
-        Object.defineProperty(navigator, "plugins", { get: () => [1, 2, 3, 4, 5] });
+        
+        // Mock plugins
+        Object.defineProperty(navigator, "plugins", { 
+            get: () => {
+                const plugins = [];
+                for (let i = 0; i < 5; i++) {
+                    plugins.push({
+                        name: `Plugin ${i}`,
+                        description: `Plugin ${i} Description`,
+                        filename: `plugin${i}.dll`
+                    });
+                }
+                return plugins;
+            }
+        });
+        
+        // Mock languages
         Object.defineProperty(navigator, "languages", { get: () => ["en-US", "en"] });
+        Object.defineProperty(navigator, "language", { get: () => "en-US" });
+        
+        // Mock platform
         Object.defineProperty(navigator, "platform", { get: () => "Win32" });
+        
+        // Mock hardware
         Object.defineProperty(navigator, "hardwareConcurrency", { get: () => 4 });
         Object.defineProperty(navigator, "deviceMemory", { get: () => 8 });
-        window.chrome = { runtime: {} };
-        Object.defineProperty(navigator, "permissions", {
-            get: () => ({
-                query: async () => ({ state: "granted" })
-            })
+        
+        // Mock Chrome
+        window.chrome = { 
+            runtime: {},
+            loadTimes: function() {},
+            csi: function() {},
+            app: {}
+        };
+        
+        // Mock permissions
+        const originalQuery = window.navigator.permissions.query;
+        window.navigator.permissions.query = (parameters) => (
+            parameters.name === 'notifications' ?
+                Promise.resolve({ state: Notification.permission }) :
+                originalQuery(parameters)
+        );
+        
+        // Override toString methods
+        Object.defineProperty(navigator, "webdriver", {
+            get: () => false,
         });
+        
+        // Mock getBattery
+        if (navigator.getBattery) {
+            navigator.getBattery = () => Promise.resolve({
+                charging: true,
+                chargingTime: 0,
+                dischargingTime: Infinity,
+                level: 1
+            });
+        }
     });
 
     const page = await context.newPage();
@@ -359,9 +424,25 @@ const WEBHOOK_URL =
 
                 try {
                     console.log(`  → Scraping detail ${i + 1}/${listings.length}: ${item.link.substring(0, 60)}...`);
+                    
+                    // Random delay between requests to avoid detection
+                    if (i > 0) {
+                        const delay = IS_HEADLESS ? 3000 + Math.random() * 4000 : 2000 + Math.random() * 3000;
+                        await sleep(delay);
+                    }
+                    
                     await detailPage.goto(item.link, { waitUntil: "domcontentloaded", timeout: 30000 });
                     // Longer wait for Linux/EC2 to ensure content loads
-                    await sleep(IS_HEADLESS ? 3000 + Math.random() * 2000 : 2000 + Math.random() * 1000);
+                    await sleep(IS_HEADLESS ? 4000 + Math.random() * 3000 : 2500 + Math.random() * 1500);
+                    
+                    // Check if blocked
+                    const pageContent = await detailPage.content();
+                    if (pageContent.includes('blocked') || pageContent.includes('Sorry, you have been blocked')) {
+                        console.log(`  ⚠️  Page blocked detected, waiting longer and retrying...`);
+                        await sleep(5000);
+                        await detailPage.reload({ waitUntil: "domcontentloaded", timeout: 30000 });
+                        await sleep(3000);
+                    }
 
                     // Wait for main content to be visible with multiple selectors
                     let contentLoaded = false;
