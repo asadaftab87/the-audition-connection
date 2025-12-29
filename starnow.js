@@ -363,13 +363,28 @@ const WEBHOOK_URL =
                     // Longer wait for Linux/EC2 to ensure content loads
                     await sleep(IS_HEADLESS ? 3000 + Math.random() * 2000 : 2000 + Math.random() * 1000);
 
-                    // Wait for main content to be visible
-                    try {
-                        await detailPage.waitForSelector(".prod-listing__header, .prod-listing__details", { timeout: 10000 });
-                        await sleep(1000);
-                    } catch (e) {
-                        console.log(`  ⚠️  Main content not found for ${item.link}`);
+                    // Wait for main content to be visible with multiple selectors
+                    let contentLoaded = false;
+                    const contentSelectors = [
+                        ".prod-listing__header",
+                        ".prod-listing__details",
+                        "h1",
+                        "[data-testid='project-title']",
+                        ".project-title"
+                    ];
+                    for (const selector of contentSelectors) {
+                        try {
+                            await detailPage.waitForSelector(selector, { timeout: 8000, state: 'visible' });
+                            contentLoaded = true;
+                            break;
+                        } catch (e) {
+                            // Try next selector
+                        }
                     }
+                    if (!contentLoaded) {
+                        console.log(`  ⚠️  Main content not found for ${item.link}, trying anyway...`);
+                    }
+                    await sleep(IS_HEADLESS ? 2000 : 1500); // Extra wait for content to render
 
                     // Expand role dropdowns
                     try {
@@ -615,13 +630,16 @@ const WEBHOOK_URL =
                     });
 
                     // log quick debug to console (one line)
-                    console.log("DEBUG:", {
-                        url: item.link,
-                        title: detail.projectName,
-                        raw_candidates: detail._debug_candidates,
-                        parsed_date: detail.shoot_date,
-                        parsed_location: detail.shoot_location,
-                    });
+                    if (!detail.projectName || !detail._debug_candidates || detail._debug_candidates.length === 0) {
+                        console.log("DEBUG:", {
+                            url: item.link,
+                            title: detail.projectName || "EMPTY",
+                            raw_candidates: detail._debug_candidates || [],
+                            parsed_date: detail.shoot_date,
+                            parsed_location: detail.shoot_location,
+                            roles_count: detail.roles?.length || 0,
+                        });
+                    }
 
                     // Fetch pay from role URLs if missing
                     for (let j = 0; j < detail.roles.length; j++) {
