@@ -12,13 +12,9 @@ function randomUA() {
     return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
 }
 
-// Detect if running on Linux/EC2 (headless mode needed)
-// xvfb provides virtual display, so we should use headless mode even with DISPLAY set
-const isLinux = os.platform() === 'linux';
-const isWindows = os.platform() === 'win32';
-const isMac = os.platform() === 'darwin';
-// Use headless on Linux unless explicitly running on Windows/Mac with real display
-const IS_HEADLESS = isLinux;
+// Always use headless: false (xvfb will provide display on Linux/EC2)
+// User reported that headless: true causes blocking, but headless: false works
+const IS_HEADLESS = false;
 
 
 function sleep(ms) {
@@ -320,8 +316,25 @@ const WEBHOOK_URL =
                 continue;
             }
             console.log(`  ✓ Page loaded, waiting for content...`);
-            // Wait for content to render
-            await sleep(IS_HEADLESS ? 3000 + Math.random() * 2000 : 2000 + Math.random() * 1500);
+            // Wait for content to render - longer wait to avoid detection
+            await sleep(IS_HEADLESS ? 5000 + Math.random() * 3000 : 3000 + Math.random() * 2000);
+            
+            // Simulate human behavior: scroll slowly
+            try {
+                const scrollSteps = 5;
+                const scrollHeight = await page.evaluate(() => document.body.scrollHeight);
+                for (let step = 1; step <= scrollSteps; step++) {
+                    await page.evaluate((step, total, height) => {
+                        window.scrollTo(0, (height / total) * step);
+                    }, step, scrollSteps, scrollHeight);
+                    await sleep(500 + Math.random() * 500);
+                }
+                // Scroll back to top
+                await page.evaluate(() => window.scrollTo(0, 0));
+                await sleep(1000);
+            } catch (e) {
+                // Ignore scroll errors
+            }
 
             // Wait for results container to be visible with retry
             console.log(`  → Waiting for results container...`);
@@ -350,11 +363,40 @@ const WEBHOOK_URL =
                     } else {
                         // Check if page is blocked
                         const checkContent = await page.content();
-                        if (checkContent.includes('blocked') || checkContent.includes('Sorry, you have been blocked')) {
+                        const checkText = await page.evaluate(() => document.body?.innerText?.substring(0, 500) || "");
+                        if (checkContent.includes('blocked') || checkContent.includes('Sorry, you have been blocked') || 
+                            checkText.includes('blocked') || checkText.includes('Sorry')) {
                             console.log(`  ⚠️  Page blocked detected while waiting for results`);
-                            await sleep(10000);
-                            await page.reload({ waitUntil: "domcontentloaded", timeout: 30000 });
-                            await sleep(5000);
+                            console.log(`  📄 Blocked content preview: ${checkText.substring(0, 150)}...`);
+                            
+                            // Wait longer and try to visit homepage again
+                            console.log(`  ⏳ Waiting 20 seconds before retry...`);
+                            await sleep(20000);
+                            
+                            // Visit homepage to reset session
+                            try {
+                                await page.goto("https://www.starnow.com", { waitUntil: "domcontentloaded", timeout: 30000 });
+                                await sleep(5000);
+                                
+                                // Scroll on homepage
+                                await page.evaluate(() => {
+                                    window.scrollTo(0, document.body.scrollHeight / 3);
+                                });
+                                await sleep(2000);
+                                
+                                // Now try the listing page again
+                                console.log(`  → Retrying listing page after homepage visit...`);
+                                await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+                                await sleep(5000);
+                                
+                                // Scroll again
+                                await page.evaluate(() => {
+                                    window.scrollTo(0, document.body.scrollHeight / 2);
+                                });
+                                await sleep(2000);
+                            } catch (retryErr) {
+                                console.log(`  ✗ Retry failed: ${retryErr.message}`);
+                            }
                         }
                     }
                 } catch (e) {

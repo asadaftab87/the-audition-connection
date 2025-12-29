@@ -2,13 +2,9 @@ import { chromium } from "playwright";
 import axios from "axios";
 import os from "os";
 
-// Detect if running on Linux/EC2 (headless mode needed)
-// xvfb provides virtual display, so we should use headless mode even with DISPLAY set
-const isLinux = os.platform() === 'linux';
-const isWindows = os.platform() === 'win32';
-const isMac = os.platform() === 'darwin';
-// Use headless on Linux unless explicitly running on Windows/Mac with real display
-const IS_HEADLESS = isLinux;
+// Always use headless: false (xvfb will provide display on Linux/EC2)
+// User reported that headless: true causes blocking, but headless: false works
+const IS_HEADLESS = false;
 
 const USER_AGENTS = [
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
