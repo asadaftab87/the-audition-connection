@@ -144,6 +144,8 @@ const WEBHOOK_URL =
             '--disable-setuid-sandbox',
             '--disable-web-security',
             '--disable-features=IsolateOrigins,site-per-process',
+            '--disable-infobars',
+            '--window-size=1920,1080',
             ...(IS_HEADLESS ? ['--disable-gpu', '--disable-software-rasterizer'] : [])
         ]
     });
@@ -153,13 +155,24 @@ const WEBHOOK_URL =
         locale: 'en-US',
         timezoneId: 'America/New_York',
         deviceScaleFactor: 1,
+        permissions: ['geolocation'],
+        geolocation: { longitude: -74.006, latitude: 40.7128 },
+        colorScheme: 'light',
     });
 
     await context.addInitScript(() => {
         Object.defineProperty(navigator, "webdriver", { get: () => false });
         Object.defineProperty(navigator, "plugins", { get: () => [1, 2, 3, 4, 5] });
         Object.defineProperty(navigator, "languages", { get: () => ["en-US", "en"] });
+        Object.defineProperty(navigator, "platform", { get: () => "Win32" });
+        Object.defineProperty(navigator, "hardwareConcurrency", { get: () => 4 });
+        Object.defineProperty(navigator, "deviceMemory", { get: () => 8 });
         window.chrome = { runtime: {} };
+        Object.defineProperty(navigator, "permissions", {
+            get: () => ({
+                query: async () => ({ state: "granted" })
+            })
+        });
     });
 
     const page = await context.newPage();
@@ -185,28 +198,79 @@ const WEBHOOK_URL =
         const pageResults = [];
 
         try {
-            await page.goto(url, { waitUntil: "networkidle", timeout: 90000 });
-            // Longer wait for Linux/EC2 to ensure content loads
-            await sleep(IS_HEADLESS ? 3000 + Math.random() * 4000 : 2000 + Math.random() * 3000);
+            console.log(`  → Loading page ${currentPage}...`);
+            let pageLoaded = false;
+            try {
+                await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+                pageLoaded = true;
+            } catch (e) {
+                console.log(`  ⚠️  domcontentloaded timeout, trying load strategy...`);
+                try {
+                    await page.goto(url, { waitUntil: "load", timeout: 30000 });
+                    pageLoaded = true;
+                } catch (e2) {
+                    console.log(`  ⚠️  load timeout, trying commit strategy...`);
+                    try {
+                        await page.goto(url, { waitUntil: "commit", timeout: 30000 });
+                        pageLoaded = true;
+                    } catch (e3) {
+                        console.log(`  ✗ Page load failed: ${e3.message}`);
+                        continue;
+                    }
+                }
+            }
+            if (!pageLoaded) {
+                console.log(`  ✗ Could not load page ${currentPage}`);
+                continue;
+            }
+            console.log(`  ✓ Page loaded, waiting for content...`);
+            // Wait for content to render
+            await sleep(IS_HEADLESS ? 3000 + Math.random() * 2000 : 2000 + Math.random() * 1500);
 
             // Wait for results container to be visible with retry
+            console.log(`  → Waiting for results container...`);
             let resultsFound = false;
-            for (let retry = 0; retry < 3; retry++) {
+            for (let retry = 0; retry < 5; retry++) {
                 try {
-                    await page.waitForSelector("#casting-results", { timeout: 15000 });
-                    await sleep(IS_HEADLESS ? 2000 : 1000);
-                    resultsFound = true;
-                    break;
+                    // Try multiple selectors
+                    const selectors = ["#casting-results", ".casting-results", "[data-testid='casting-results']"];
+                    let found = false;
+                    for (const selector of selectors) {
+                        try {
+                            await page.waitForSelector(selector, { timeout: 8000, state: 'visible' });
+                            found = true;
+                            break;
+                        } catch (e) {
+                            // Try next selector
+                        }
+                    }
+                    if (found) {
+                        await sleep(IS_HEADLESS ? 2000 : 1500);
+                        resultsFound = true;
+                        console.log(`  ✓ Results container found`);
+                        break;
+                    }
                 } catch (e) {
-                    console.log(`⚠️  Retry ${retry + 1}/3: Results container not found on page ${currentPage}`);
-                    if (retry < 2) {
-                        await sleep(2000);
-                        await page.reload({ waitUntil: "networkidle", timeout: 60000 });
+                    console.log(`  ⚠️  Retry ${retry + 1}/5: Results container not found`);
+                    if (retry < 4) {
+                        await sleep(3000);
+                        console.log(`  → Reloading page...`);
+                        try {
+                            await page.reload({ waitUntil: "domcontentloaded", timeout: 30000 });
+                            await sleep(3000);
+                        } catch (reloadErr) {
+                            console.log(`  ⚠️  Reload failed: ${reloadErr.message}`);
+                        }
                     }
                 }
             }
             if (!resultsFound) {
-                console.log(`✗ Skipping page ${currentPage} - results container not found after retries`);
+                console.log(`  ✗ Skipping page ${currentPage} - results container not found after retries`);
+                // Try to check if page has any content
+                const pageContent = await page.content();
+                if (pageContent.includes('captcha') || pageContent.includes('blocked')) {
+                    console.log(`  ⚠️  Page might be blocked or showing captcha`);
+                }
                 continue;
             }
 
@@ -294,9 +358,9 @@ const WEBHOOK_URL =
                 const detailPage = await context.newPage();
 
                 try {
-                    await detailPage.goto(item.link, { waitUntil: "networkidle", timeout: 60000 });
-                    // Longer wait for Linux/EC2
-                    await sleep(IS_HEADLESS ? 3000 + Math.random() * 2000 : 2000 + Math.random() * 1000);
+                    await detailPage.goto(item.link, { waitUntil: "domcontentloaded", timeout: 30000 });
+                    // Shorter wait - domcontentloaded already waited
+                    await sleep(IS_HEADLESS ? 2000 + Math.random() * 1000 : 1500 + Math.random() * 1000);
 
                     // Expand role dropdowns
                     try {
