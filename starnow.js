@@ -328,32 +328,43 @@ const WEBHOOK_URL =
             let resultsFound = false;
             for (let retry = 0; retry < 5; retry++) {
                 try {
-                    // Try multiple selectors
-                    const selectors = ["#casting-results", ".casting-results", "[data-testid='casting-results']"];
+                    // Try multiple selectors with longer timeout
+                    const selectors = ["#casting-results", ".casting-results", "[data-testid='casting-results']", "#casting-results > div", "#casting-results > article"];
                     let found = false;
+                    let foundSelector = null;
                     for (const selector of selectors) {
                         try {
-                            await page.waitForSelector(selector, { timeout: 8000, state: 'visible' });
+                            await page.waitForSelector(selector, { timeout: 12000, state: 'visible' });
                             found = true;
+                            foundSelector = selector;
                             break;
                         } catch (e) {
                             // Try next selector
                         }
                     }
                     if (found) {
+                        console.log(`  ✓ Results container found using selector: ${foundSelector}`);
                         await sleep(IS_HEADLESS ? 2000 : 1500);
                         resultsFound = true;
-                        console.log(`  ✓ Results container found`);
                         break;
+                    } else {
+                        // Check if page is blocked
+                        const checkContent = await page.content();
+                        if (checkContent.includes('blocked') || checkContent.includes('Sorry, you have been blocked')) {
+                            console.log(`  ⚠️  Page blocked detected while waiting for results`);
+                            await sleep(10000);
+                            await page.reload({ waitUntil: "domcontentloaded", timeout: 30000 });
+                            await sleep(5000);
+                        }
                     }
                 } catch (e) {
-                    console.log(`  ⚠️  Retry ${retry + 1}/5: Results container not found`);
+                    console.log(`  ⚠️  Retry ${retry + 1}/5: Results container not found - ${e.message}`);
                     if (retry < 4) {
-                        await sleep(3000);
+                        await sleep(5000);
                         console.log(`  → Reloading page...`);
                         try {
                             await page.reload({ waitUntil: "domcontentloaded", timeout: 30000 });
-                            await sleep(3000);
+                            await sleep(5000);
                         } catch (reloadErr) {
                             console.log(`  ⚠️  Reload failed: ${reloadErr.message}`);
                         }
@@ -362,12 +373,40 @@ const WEBHOOK_URL =
             }
             if (!resultsFound) {
                 console.log(`  ✗ Skipping page ${currentPage} - results container not found after retries`);
-                // Try to check if page has any content
-                const pageContent = await page.content();
-                if (pageContent.includes('captcha') || pageContent.includes('blocked')) {
-                    console.log(`  ⚠️  Page might be blocked or showing captcha`);
-                    // Wait longer and try to get cookies
-                    await sleep(5000);
+                // Debug: Check what's actually on the page
+                try {
+                    const pageTitle = await page.title();
+                    const pageUrl = page.url();
+                    console.log(`  🔍 Debug - Page title: "${pageTitle}", URL: ${pageUrl}`);
+                    
+                    // Check for common blocking indicators
+                    const pageContent = await page.content();
+                    const pageText = await page.evaluate(() => document.body?.innerText?.substring(0, 500) || "");
+                    
+                    if (pageContent.includes('captcha') || pageContent.includes('blocked') || pageText.includes('blocked')) {
+                        console.log(`  ⚠️  Page is blocked or showing captcha`);
+                        console.log(`  📄 Page preview: ${pageText.substring(0, 200)}...`);
+                        // Wait longer and try homepage again
+                        await sleep(10000);
+                        try {
+                            await page.goto("https://www.starnow.com", { waitUntil: "domcontentloaded", timeout: 30000 });
+                            await sleep(5000);
+                        } catch (e) {
+                            console.log(`  ⚠️  Homepage visit failed: ${e.message}`);
+                        }
+                    } else {
+                        // Check if selector exists but not visible
+                        const selectorExists = await page.evaluate(() => {
+                            return !!document.querySelector("#casting-results");
+                        });
+                        if (selectorExists) {
+                            console.log(`  ⚠️  Selector exists but not visible, might need more wait time`);
+                        } else {
+                            console.log(`  ⚠️  Selector #casting-results does not exist on page`);
+                        }
+                    }
+                } catch (debugErr) {
+                    console.log(`  ⚠️  Debug check failed: ${debugErr.message}`);
                 }
                 continue;
             }
