@@ -243,6 +243,26 @@ const WEBHOOK_URL =
     const page = await context.newPage();
     const totalPages = 103;
 
+    // Visit homepage first to establish session and look more human-like
+    console.log("🏠 Visiting homepage to establish session...");
+    try {
+        await page.goto("https://www.starnow.com", { waitUntil: "domcontentloaded", timeout: 30000 });
+        await sleep(IS_HEADLESS ? 3000 + Math.random() * 2000 : 2000 + Math.random() * 1000);
+        
+        // Simulate some human behavior on homepage
+        await page.evaluate(() => {
+            window.scrollTo(0, document.body.scrollHeight / 4);
+        });
+        await sleep(1000 + Math.random() * 1000);
+        await page.evaluate(() => {
+            window.scrollTo(0, document.body.scrollHeight / 2);
+        });
+        await sleep(1000 + Math.random() * 1000);
+        console.log("✓ Homepage visited, session established");
+    } catch (e) {
+        console.log(`⚠️  Homepage visit failed: ${e.message}, continuing anyway...`);
+    }
+
     const sendWebhook = async (data, label = "") => {
         if (!data.length)
             return console.log(`No data to send ${label ? `for ${label}` : ""}.`);
@@ -264,6 +284,14 @@ const WEBHOOK_URL =
 
         try {
             console.log(`  → Loading page ${currentPage}...`);
+            
+            // Add delay before each page request (except first page)
+            if (currentPage > 1) {
+                const pageDelay = IS_HEADLESS ? 5000 + Math.random() * 5000 : 3000 + Math.random() * 3000;
+                console.log(`  ⏳ Waiting ${Math.round(pageDelay/1000)}s before loading page...`);
+                await sleep(pageDelay);
+            }
+            
             let pageLoaded = false;
             try {
                 await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
@@ -280,12 +308,15 @@ const WEBHOOK_URL =
                         pageLoaded = true;
                     } catch (e3) {
                         console.log(`  ✗ Page load failed: ${e3.message}`);
+                        // Wait longer before trying next page
+                        await sleep(10000);
                         continue;
                     }
                 }
             }
             if (!pageLoaded) {
                 console.log(`  ✗ Could not load page ${currentPage}`);
+                await sleep(10000);
                 continue;
             }
             console.log(`  ✓ Page loaded, waiting for content...`);
@@ -344,10 +375,19 @@ const WEBHOOK_URL =
             // Check if main page is blocked
             const mainPageContent = await page.content();
             if (mainPageContent.includes('blocked') || mainPageContent.includes('Sorry, you have been blocked')) {
-                console.log(`  ⚠️  Main page blocked! Waiting 10 seconds and retrying...`);
-                await sleep(10000);
-                await page.reload({ waitUntil: "domcontentloaded", timeout: 30000 });
-                await sleep(5000);
+                console.log(`  ⚠️  Main page blocked! Waiting 30 seconds and trying homepage again...`);
+                await sleep(30000);
+                
+                // Go back to homepage to re-establish session
+                try {
+                    await page.goto("https://www.starnow.com", { waitUntil: "domcontentloaded", timeout: 30000 });
+                    await sleep(5000);
+                    console.log(`  → Retrying page ${currentPage} after homepage visit...`);
+                    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+                    await sleep(5000);
+                } catch (e) {
+                    console.log(`  ✗ Retry failed: ${e.message}`);
+                }
                 // Re-check listings
                 const retryListings = await page.$$eval(
                     "#casting-results > div, #casting-results > article",
