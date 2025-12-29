@@ -197,7 +197,7 @@ const WEBHOOK_URL = "https://manikinagency.app.n8n.cloud/webhook/a0586890-2134-4
 
 (async () => {
   const browser = await chromium.launch({ 
-    headless: true,
+    headless: false,
     args: [
       '--disable-blink-features=AutomationControlled',
       '--disable-dev-shm-usage',

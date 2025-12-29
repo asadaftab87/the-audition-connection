@@ -125,7 +125,7 @@ const WEBHOOK_URL =
 
 (async () => {
     const browser = await chromium.launch({ 
-        headless: true,
+        headless: false,
         args: [
             '--disable-blink-features=AutomationControlled',
             '--disable-dev-shm-usage',
