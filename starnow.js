@@ -137,9 +137,10 @@ const WEBHOOK_URL =
     });
     const context = await browser.newContext({
         userAgent: randomUA(),
-        viewport: { width: 1200, height: 900 },
+        viewport: { width: 1920, height: 1080 },
         locale: 'en-US',
         timezoneId: 'America/New_York',
+        deviceScaleFactor: 1,
     });
 
     await context.addInitScript(() => {
@@ -172,8 +173,16 @@ const WEBHOOK_URL =
         const pageResults = [];
 
         try {
-            await page.goto(url, { waitUntil: "domcontentloaded", timeout: 90000 });
-            await sleep(1000 + Math.random() * 2000);
+            await page.goto(url, { waitUntil: "networkidle", timeout: 90000 });
+            await sleep(2000 + Math.random() * 3000);
+
+            // Wait for results container to be visible
+            try {
+                await page.waitForSelector("#casting-results", { timeout: 10000 });
+                await sleep(1000);
+            } catch (e) {
+                console.log(`Warning: Results container not found on page ${currentPage}`);
+            }
 
             const listings = await page.$$eval(
                 "#casting-results > div, #casting-results > article",
@@ -209,15 +218,58 @@ const WEBHOOK_URL =
                 }
             );
 
-            console.log(`Found ${listings.length} listings on page ${currentPage}`);
+            if (!listings || listings.length === 0) {
+                console.log(`⚠️  No listings found on page ${currentPage}. Retrying...`);
+                await sleep(3000);
+                // Retry once
+                const retryListings = await page.$$eval(
+                    "#casting-results > div, #casting-results > article",
+                    (cards) => {
+                        const out = [];
+                        for (const card of cards) {
+                            const a = card.querySelector("a[href*='/casting/']");
+                            if (!a) continue;
+                            const link = a.href.split("?")[0];
+                            const rawTitle = a.innerText.trim();
+                            let location = "N/A";
+                            const locEl = card.querySelector(".prod-listing__details.submission-details div");
+                            if (locEl) location = locEl.innerText.trim();
+                            let posted = "N/A";
+                            const postedSpan = Array.from(card.querySelectorAll("span.tw-text-gray-dark")).find(
+                                (span) => span.textContent.includes("Posted:")
+                            );
+                            if (postedSpan) {
+                                const text = Array.from(postedSpan.childNodes)
+                                    .filter((n) => n.nodeType === Node.TEXT_NODE)
+                                    .map((n) => n.textContent.trim())
+                                    .join(" ");
+                                const match = text.match(/Posted:\s*(.+)/i);
+                                if (match) posted = match[1].trim();
+                            }
+                            out.push({ title: rawTitle, link, location, posted: posted || "N/A" });
+                        }
+                        const seen = new Set();
+                        return out.filter((x) => x.link && !seen.has(x.link) && seen.add(x.link));
+                    }
+                );
+                if (retryListings && retryListings.length > 0) {
+                    listings = retryListings;
+                    console.log(`✓ Found ${listings.length} listings on retry for page ${currentPage}`);
+                } else {
+                    console.log(`✗ Still no listings found on page ${currentPage}. Skipping...`);
+                    continue;
+                }
+            } else {
+                console.log(`Found ${listings.length} listings on page ${currentPage}`);
+            }
 
             for (let i = 0; i < listings.length; i++) {
                 const item = listings[i];
                 const detailPage = await context.newPage();
 
                 try {
-                    await detailPage.goto(item.link, { waitUntil: "domcontentloaded", timeout: 45000 });
-                    await sleep(1500);
+                    await detailPage.goto(item.link, { waitUntil: "networkidle", timeout: 45000 });
+                    await sleep(2000 + Math.random() * 1000);
 
                     // Expand role dropdowns
                     try {
