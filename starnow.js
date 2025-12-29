@@ -1,5 +1,6 @@
 import { chromium } from "playwright";
 import axios from "axios";
+import os from "os";
 
 const USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
@@ -10,6 +11,11 @@ const USER_AGENTS = [
 function randomUA() {
     return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
 }
+
+// Detect if running on Linux/EC2 (headless mode needed)
+const isLinux = os.platform() === 'linux';
+const hasDisplay = process.env.DISPLAY !== undefined;
+const IS_HEADLESS = isLinux && !hasDisplay;
 
 
 function sleep(ms) {
@@ -124,8 +130,10 @@ const WEBHOOK_URL =
     "https://manikinagency.app.n8n.cloud/webhook/a0586890-2134-4a91-99f9-1be0884d5c68";
 
 (async () => {
+    console.log(`🌐 Platform: ${os.platform()}, Headless: ${IS_HEADLESS}`);
+    
     const browser = await chromium.launch({ 
-        headless: false,
+        headless: IS_HEADLESS,
         args: [
             '--disable-blink-features=AutomationControlled',
             '--disable-dev-shm-usage',
@@ -133,6 +141,7 @@ const WEBHOOK_URL =
             '--disable-setuid-sandbox',
             '--disable-web-security',
             '--disable-features=IsolateOrigins,site-per-process',
+            ...(IS_HEADLESS ? ['--disable-gpu', '--disable-software-rasterizer'] : [])
         ]
     });
     const context = await browser.newContext({
@@ -174,14 +183,28 @@ const WEBHOOK_URL =
 
         try {
             await page.goto(url, { waitUntil: "networkidle", timeout: 90000 });
-            await sleep(2000 + Math.random() * 3000);
+            // Longer wait for Linux/EC2 to ensure content loads
+            await sleep(IS_HEADLESS ? 3000 + Math.random() * 4000 : 2000 + Math.random() * 3000);
 
-            // Wait for results container to be visible
-            try {
-                await page.waitForSelector("#casting-results", { timeout: 10000 });
-                await sleep(1000);
-            } catch (e) {
-                console.log(`Warning: Results container not found on page ${currentPage}`);
+            // Wait for results container to be visible with retry
+            let resultsFound = false;
+            for (let retry = 0; retry < 3; retry++) {
+                try {
+                    await page.waitForSelector("#casting-results", { timeout: 15000 });
+                    await sleep(IS_HEADLESS ? 2000 : 1000);
+                    resultsFound = true;
+                    break;
+                } catch (e) {
+                    console.log(`⚠️  Retry ${retry + 1}/3: Results container not found on page ${currentPage}`);
+                    if (retry < 2) {
+                        await sleep(2000);
+                        await page.reload({ waitUntil: "networkidle", timeout: 60000 });
+                    }
+                }
+            }
+            if (!resultsFound) {
+                console.log(`✗ Skipping page ${currentPage} - results container not found after retries`);
+                continue;
             }
 
             const listings = await page.$$eval(
@@ -268,8 +291,9 @@ const WEBHOOK_URL =
                 const detailPage = await context.newPage();
 
                 try {
-                    await detailPage.goto(item.link, { waitUntil: "networkidle", timeout: 45000 });
-                    await sleep(2000 + Math.random() * 1000);
+                    await detailPage.goto(item.link, { waitUntil: "networkidle", timeout: 60000 });
+                    // Longer wait for Linux/EC2
+                    await sleep(IS_HEADLESS ? 3000 + Math.random() * 2000 : 2000 + Math.random() * 1000);
 
                     // Expand role dropdowns
                     try {

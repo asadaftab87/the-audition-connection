@@ -1,5 +1,11 @@
 import { chromium } from "playwright";
 import axios from "axios";
+import os from "os";
+
+// Detect if running on Linux/EC2 (headless mode needed)
+const isLinux = os.platform() === 'linux';
+const hasDisplay = process.env.DISPLAY !== undefined;
+const IS_HEADLESS = isLinux && !hasDisplay;
 
 const USER_AGENTS = [
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
@@ -98,8 +104,10 @@ const WEBHOOK_URL =
   "https://manikinagency.app.n8n.cloud/webhook/a0586890-2134-4a91-99f9-1be0884d5c68";
 
 (async () => {
+  console.log(`🌐 Platform: ${os.platform()}, Headless: ${IS_HEADLESS}`);
+  
   const browser = await chromium.launch({ 
-    headless: false,
+    headless: IS_HEADLESS,
     args: [
       '--disable-blink-features=AutomationControlled',
       '--disable-dev-shm-usage',
@@ -107,13 +115,15 @@ const WEBHOOK_URL =
       '--disable-setuid-sandbox',
       '--disable-web-security',
       '--disable-features=IsolateOrigins,site-per-process',
+      ...(IS_HEADLESS ? ['--disable-gpu', '--disable-software-rasterizer'] : [])
     ]
   });
   const ctx = await browser.newContext({
     userAgent: randomUA(),
-    viewport: { width: 1200, height: 900 },
+    viewport: { width: 1920, height: 1080 },
     locale: 'en-US',
     timezoneId: 'America/New_York',
+    deviceScaleFactor: 1,
   });
 
   await ctx.addInitScript(() => {
