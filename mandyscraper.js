@@ -98,14 +98,29 @@ const WEBHOOK_URL =
   "https://manikinagency.app.n8n.cloud/webhook/a0586890-2134-4a91-99f9-1be0884d5c68";
 
 (async () => {
-  const browser = await chromium.launch({ headless: false });
+  const browser = await chromium.launch({ 
+    headless: "new",
+    args: [
+      '--disable-blink-features=AutomationControlled',
+      '--disable-dev-shm-usage',
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-web-security',
+      '--disable-features=IsolateOrigins,site-per-process',
+    ]
+  });
   const ctx = await browser.newContext({
     userAgent: randomUA(),
     viewport: { width: 1200, height: 900 },
+    locale: 'en-US',
+    timezoneId: 'America/New_York',
   });
 
   await ctx.addInitScript(() => {
     Object.defineProperty(navigator, "webdriver", { get: () => false });
+    Object.defineProperty(navigator, "plugins", { get: () => [1, 2, 3, 4, 5] });
+    Object.defineProperty(navigator, "languages", { get: () => ["en-US", "en"] });
+    window.chrome = { runtime: {} };
   });
 
   const page = await ctx.newPage();
