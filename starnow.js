@@ -335,9 +335,75 @@ const WEBHOOK_URL =
                 const pageContent = await page.content();
                 if (pageContent.includes('captcha') || pageContent.includes('blocked')) {
                     console.log(`  ⚠️  Page might be blocked or showing captcha`);
+                    // Wait longer and try to get cookies
+                    await sleep(5000);
                 }
                 continue;
             }
+            
+            // Check if main page is blocked
+            const mainPageContent = await page.content();
+            if (mainPageContent.includes('blocked') || mainPageContent.includes('Sorry, you have been blocked')) {
+                console.log(`  ⚠️  Main page blocked! Waiting 10 seconds and retrying...`);
+                await sleep(10000);
+                await page.reload({ waitUntil: "domcontentloaded", timeout: 30000 });
+                await sleep(5000);
+                // Re-check listings
+                const retryListings = await page.$$eval(
+                    "#casting-results > div, #casting-results > article",
+                    (cards) => {
+                        const out = [];
+                        for (const card of cards) {
+                            const a = card.querySelector("a[href*='/casting/']");
+                            if (!a) continue;
+                            const link = a.href.split("?")[0];
+                            const rawTitle = a.innerText.trim();
+                            let location = "N/A";
+                            const locEl = card.querySelector(".prod-listing__details.submission-details div");
+                            if (locEl) location = locEl.innerText.trim();
+                            let posted = "N/A";
+                            const postedSpan = Array.from(card.querySelectorAll("span.tw-text-gray-dark")).find(
+                                (span) => span.textContent.includes("Posted:")
+                            );
+                            if (postedSpan) {
+                                const text = Array.from(postedSpan.childNodes)
+                                    .filter((n) => n.nodeType === Node.TEXT_NODE)
+                                    .map((n) => n.textContent.trim())
+                                    .join(" ");
+                                const match = text.match(/Posted:\s*(.+)/i);
+                                if (match) posted = match[1].trim();
+                            }
+                            out.push({ title: rawTitle, link, location, posted: posted || "N/A" });
+                        }
+                        const seen = new Set();
+                        return out.filter((x) => x.link && !seen.has(x.link) && seen.add(x.link));
+                    }
+                );
+                if (retryListings && retryListings.length > 0) {
+                    listings = retryListings;
+                    console.log(`✓ Got ${listings.length} listings after retry`);
+                } else {
+                    console.log(`✗ Still blocked, skipping page ${currentPage}`);
+                    continue;
+                }
+            }
+            
+            // Simulate human behavior: scroll and wait
+            try {
+                await page.evaluate(() => {
+                    window.scrollTo(0, document.body.scrollHeight / 3);
+                });
+                await sleep(1000 + Math.random() * 1000);
+                await page.evaluate(() => {
+                    window.scrollTo(0, document.body.scrollHeight / 2);
+                });
+                await sleep(1000 + Math.random() * 1000);
+            } catch (e) {
+                // Ignore scroll errors
+            }
+            
+            // Get cookies from main page to use in detail pages
+            const cookies = await context.cookies();
 
             const listings = await page.$$eval(
                 "#casting-results > div, #casting-results > article",
@@ -421,27 +487,45 @@ const WEBHOOK_URL =
             for (let i = 0; i < listings.length; i++) {
                 const item = listings[i];
                 const detailPage = await context.newPage();
+                
+                // Set cookies from main page to maintain session
+                if (cookies && cookies.length > 0) {
+                    try {
+                        await detailPage.context().addCookies(cookies);
+                    } catch (e) {
+                        // Cookies might already be set, ignore
+                    }
+                }
 
                 try {
                     console.log(`  → Scraping detail ${i + 1}/${listings.length}: ${item.link.substring(0, 60)}...`);
                     
-                    // Random delay between requests to avoid detection
+                    // Random delay between requests to avoid detection (longer delays)
                     if (i > 0) {
-                        const delay = IS_HEADLESS ? 3000 + Math.random() * 4000 : 2000 + Math.random() * 3000;
+                        const delay = IS_HEADLESS ? 5000 + Math.random() * 5000 : 3000 + Math.random() * 4000;
+                        console.log(`  ⏳ Waiting ${Math.round(delay/1000)}s before next request...`);
                         await sleep(delay);
                     }
                     
                     await detailPage.goto(item.link, { waitUntil: "domcontentloaded", timeout: 30000 });
                     // Longer wait for Linux/EC2 to ensure content loads
-                    await sleep(IS_HEADLESS ? 4000 + Math.random() * 3000 : 2500 + Math.random() * 1500);
+                    await sleep(IS_HEADLESS ? 5000 + Math.random() * 3000 : 3000 + Math.random() * 2000);
                     
                     // Check if blocked
                     const pageContent = await detailPage.content();
                     if (pageContent.includes('blocked') || pageContent.includes('Sorry, you have been blocked')) {
-                        console.log(`  ⚠️  Page blocked detected, waiting longer and retrying...`);
-                        await sleep(5000);
+                        console.log(`  ⚠️  Page blocked detected, waiting 15 seconds and retrying...`);
+                        await sleep(15000);
                         await detailPage.reload({ waitUntil: "domcontentloaded", timeout: 30000 });
-                        await sleep(3000);
+                        await sleep(5000);
+                        
+                        // Check again
+                        const retryContent = await detailPage.content();
+                        if (retryContent.includes('blocked') || retryContent.includes('Sorry, you have been blocked')) {
+                            console.log(`  ✗ Still blocked after retry, skipping this detail page`);
+                            await detailPage.close();
+                            continue;
+                        }
                     }
 
                     // Wait for main content to be visible with multiple selectors
