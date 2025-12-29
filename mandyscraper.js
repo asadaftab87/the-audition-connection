@@ -1,10 +1,5 @@
 import { chromium } from "playwright";
 import axios from "axios";
-import os from "os";
-
-// Always use headless: false (xvfb will provide display on Linux/EC2)
-// User reported that headless: true causes blocking, but headless: false works
-const IS_HEADLESS = false;
 
 const USER_AGENTS = [
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
@@ -103,33 +98,14 @@ const WEBHOOK_URL =
   "https://manikinagency.app.n8n.cloud/webhook/a0586890-2134-4a91-99f9-1be0884d5c68";
 
 (async () => {
-  console.log(`🌐 Platform: ${os.platform()}, Headless: ${IS_HEADLESS}`);
-  
-  const browser = await chromium.launch({ 
-    headless: IS_HEADLESS,
-    args: [
-      '--disable-blink-features=AutomationControlled',
-      '--disable-dev-shm-usage',
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-web-security',
-      '--disable-features=IsolateOrigins,site-per-process',
-      ...(IS_HEADLESS ? ['--disable-gpu', '--disable-software-rasterizer'] : [])
-    ]
-  });
+  const browser = await chromium.launch({ headless: false });
   const ctx = await browser.newContext({
     userAgent: randomUA(),
-    viewport: { width: 1920, height: 1080 },
-    locale: 'en-US',
-    timezoneId: 'America/New_York',
-    deviceScaleFactor: 1,
+    viewport: { width: 1200, height: 900 },
   });
 
   await ctx.addInitScript(() => {
     Object.defineProperty(navigator, "webdriver", { get: () => false });
-    Object.defineProperty(navigator, "plugins", { get: () => [1, 2, 3, 4, 5] });
-    Object.defineProperty(navigator, "languages", { get: () => ["en-US", "en"] });
-    window.chrome = { runtime: {} };
   });
 
   const page = await ctx.newPage();

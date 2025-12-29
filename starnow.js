@@ -1,6 +1,5 @@
 import { chromium } from "playwright";
 import axios from "axios";
-import os from "os";
 
 const USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
@@ -11,10 +10,6 @@ const USER_AGENTS = [
 function randomUA() {
     return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
 }
-
-// Always use headless: false (xvfb will provide display on Linux/EC2)
-// User reported that headless: true causes blocking, but headless: false works
-const IS_HEADLESS = false;
 
 
 function sleep(ms) {
@@ -129,135 +124,18 @@ const WEBHOOK_URL =
     "https://manikinagency.app.n8n.cloud/webhook/a0586890-2134-4a91-99f9-1be0884d5c68";
 
 (async () => {
-    console.log(`🌐 Platform: ${os.platform()}, Headless: ${IS_HEADLESS}`);
-    
-    const browser = await chromium.launch({ 
-        headless: IS_HEADLESS,
-        args: [
-            '--disable-blink-features=AutomationControlled',
-            '--disable-dev-shm-usage',
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-web-security',
-            '--disable-features=IsolateOrigins,site-per-process',
-            '--disable-infobars',
-            '--window-size=1920,1080',
-            '--start-maximized',
-            '--disable-extensions',
-            '--disable-plugins-discovery',
-            '--disable-default-apps',
-            ...(IS_HEADLESS ? ['--disable-gpu', '--disable-software-rasterizer'] : [])
-        ]
-    });
+    const browser = await chromium.launch({ headless: false });
     const context = await browser.newContext({
         userAgent: randomUA(),
-        viewport: { width: 1920, height: 1080 },
-        locale: 'en-US',
-        timezoneId: 'America/New_York',
-        deviceScaleFactor: 1,
-        permissions: ['geolocation'],
-        geolocation: { longitude: -74.006, latitude: 40.7128 },
-        colorScheme: 'light',
-        // Add extra headers to look more like a real browser
-        extraHTTPHeaders: {
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'DNT': '1',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
-            'Sec-Fetch-User': '?1',
-            'Cache-Control': 'max-age=0',
-        },
+        viewport: { width: 1200, height: 900 },
     });
 
     await context.addInitScript(() => {
-        // Remove webdriver property
         Object.defineProperty(navigator, "webdriver", { get: () => false });
-        
-        // Mock plugins
-        Object.defineProperty(navigator, "plugins", { 
-            get: () => {
-                const plugins = [];
-                for (let i = 0; i < 5; i++) {
-                    plugins.push({
-                        name: `Plugin ${i}`,
-                        description: `Plugin ${i} Description`,
-                        filename: `plugin${i}.dll`
-                    });
-                }
-                return plugins;
-            }
-        });
-        
-        // Mock languages
-        Object.defineProperty(navigator, "languages", { get: () => ["en-US", "en"] });
-        Object.defineProperty(navigator, "language", { get: () => "en-US" });
-        
-        // Mock platform
-        Object.defineProperty(navigator, "platform", { get: () => "Win32" });
-        
-        // Mock hardware
-        Object.defineProperty(navigator, "hardwareConcurrency", { get: () => 4 });
-        Object.defineProperty(navigator, "deviceMemory", { get: () => 8 });
-        
-        // Mock Chrome
-        window.chrome = { 
-            runtime: {},
-            loadTimes: function() {},
-            csi: function() {},
-            app: {}
-        };
-        
-        // Mock permissions
-        const originalQuery = window.navigator.permissions.query;
-        window.navigator.permissions.query = (parameters) => (
-            parameters.name === 'notifications' ?
-                Promise.resolve({ state: Notification.permission }) :
-                originalQuery(parameters)
-        );
-        
-        // Override toString methods
-        Object.defineProperty(navigator, "webdriver", {
-            get: () => false,
-        });
-        
-        // Mock getBattery
-        if (navigator.getBattery) {
-            navigator.getBattery = () => Promise.resolve({
-                charging: true,
-                chargingTime: 0,
-                dischargingTime: Infinity,
-                level: 1
-            });
-        }
     });
 
     const page = await context.newPage();
     const totalPages = 103;
-
-    // Visit homepage first to establish session and look more human-like
-    console.log("🏠 Visiting homepage to establish session...");
-    try {
-        await page.goto("https://www.starnow.com", { waitUntil: "domcontentloaded", timeout: 30000 });
-        await sleep(IS_HEADLESS ? 3000 + Math.random() * 2000 : 2000 + Math.random() * 1000);
-        
-        // Simulate some human behavior on homepage
-        await page.evaluate(() => {
-            window.scrollTo(0, document.body.scrollHeight / 4);
-        });
-        await sleep(1000 + Math.random() * 1000);
-        await page.evaluate(() => {
-            window.scrollTo(0, document.body.scrollHeight / 2);
-        });
-        await sleep(1000 + Math.random() * 1000);
-        console.log("✓ Homepage visited, session established");
-    } catch (e) {
-        console.log(`⚠️  Homepage visit failed: ${e.message}, continuing anyway...`);
-    }
 
     const sendWebhook = async (data, label = "") => {
         if (!data.length)
@@ -279,252 +157,8 @@ const WEBHOOK_URL =
         const pageResults = [];
 
         try {
-            console.log(`  → Loading page ${currentPage}...`);
-            
-            // Add delay before each page request (except first page)
-            if (currentPage > 1) {
-                const pageDelay = IS_HEADLESS ? 5000 + Math.random() * 5000 : 3000 + Math.random() * 3000;
-                console.log(`  ⏳ Waiting ${Math.round(pageDelay/1000)}s before loading page...`);
-                await sleep(pageDelay);
-            }
-            
-            let pageLoaded = false;
-            try {
-                await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
-                pageLoaded = true;
-            } catch (e) {
-                console.log(`  ⚠️  domcontentloaded timeout, trying load strategy...`);
-                try {
-                    await page.goto(url, { waitUntil: "load", timeout: 30000 });
-                    pageLoaded = true;
-                } catch (e2) {
-                    console.log(`  ⚠️  load timeout, trying commit strategy...`);
-                    try {
-                        await page.goto(url, { waitUntil: "commit", timeout: 30000 });
-                        pageLoaded = true;
-                    } catch (e3) {
-                        console.log(`  ✗ Page load failed: ${e3.message}`);
-                        // Wait longer before trying next page
-                        await sleep(10000);
-                        continue;
-                    }
-                }
-            }
-            if (!pageLoaded) {
-                console.log(`  ✗ Could not load page ${currentPage}`);
-                await sleep(10000);
-                continue;
-            }
-            console.log(`  ✓ Page loaded, waiting for content...`);
-            // Wait for content to render - longer wait to avoid detection
-            await sleep(IS_HEADLESS ? 5000 + Math.random() * 3000 : 3000 + Math.random() * 2000);
-            
-            // Simulate human behavior: scroll slowly
-            try {
-                const scrollSteps = 5;
-                const scrollHeight = await page.evaluate(() => document.body.scrollHeight);
-                for (let step = 1; step <= scrollSteps; step++) {
-                    await page.evaluate((step, total, height) => {
-                        window.scrollTo(0, (height / total) * step);
-                    }, step, scrollSteps, scrollHeight);
-                    await sleep(500 + Math.random() * 500);
-                }
-                // Scroll back to top
-                await page.evaluate(() => window.scrollTo(0, 0));
-                await sleep(1000);
-            } catch (e) {
-                // Ignore scroll errors
-            }
-
-            // Wait for results container to be visible with retry
-            console.log(`  → Waiting for results container...`);
-            let resultsFound = false;
-            for (let retry = 0; retry < 5; retry++) {
-                try {
-                    // Try multiple selectors with longer timeout
-                    const selectors = ["#casting-results", ".casting-results", "[data-testid='casting-results']", "#casting-results > div", "#casting-results > article"];
-                    let found = false;
-                    let foundSelector = null;
-                    for (const selector of selectors) {
-                        try {
-                            await page.waitForSelector(selector, { timeout: 12000, state: 'visible' });
-                            found = true;
-                            foundSelector = selector;
-                            break;
-                        } catch (e) {
-                            // Try next selector
-                        }
-                    }
-                    if (found) {
-                        console.log(`  ✓ Results container found using selector: ${foundSelector}`);
-                        await sleep(IS_HEADLESS ? 2000 : 1500);
-                        resultsFound = true;
-                        break;
-                    } else {
-                        // Check if page is blocked
-                        const checkContent = await page.content();
-                        const checkText = await page.evaluate(() => document.body?.innerText?.substring(0, 500) || "");
-                        if (checkContent.includes('blocked') || checkContent.includes('Sorry, you have been blocked') || 
-                            checkText.includes('blocked') || checkText.includes('Sorry')) {
-                            console.log(`  ⚠️  Page blocked detected while waiting for results`);
-                            console.log(`  📄 Blocked content preview: ${checkText.substring(0, 150)}...`);
-                            
-                            // Wait longer and try to visit homepage again
-                            console.log(`  ⏳ Waiting 20 seconds before retry...`);
-                            await sleep(20000);
-                            
-                            // Visit homepage to reset session
-                            try {
-                                await page.goto("https://www.starnow.com", { waitUntil: "domcontentloaded", timeout: 30000 });
-                                await sleep(5000);
-                                
-                                // Scroll on homepage
-                                await page.evaluate(() => {
-                                    window.scrollTo(0, document.body.scrollHeight / 3);
-                                });
-                                await sleep(2000);
-                                
-                                // Now try the listing page again
-                                console.log(`  → Retrying listing page after homepage visit...`);
-                                await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
-                                await sleep(5000);
-                                
-                                // Scroll again
-                                await page.evaluate(() => {
-                                    window.scrollTo(0, document.body.scrollHeight / 2);
-                                });
-                                await sleep(2000);
-                            } catch (retryErr) {
-                                console.log(`  ✗ Retry failed: ${retryErr.message}`);
-                            }
-                        }
-                    }
-                } catch (e) {
-                    console.log(`  ⚠️  Retry ${retry + 1}/5: Results container not found - ${e.message}`);
-                    if (retry < 4) {
-                        await sleep(5000);
-                        console.log(`  → Reloading page...`);
-                        try {
-                            await page.reload({ waitUntil: "domcontentloaded", timeout: 30000 });
-                            await sleep(5000);
-                        } catch (reloadErr) {
-                            console.log(`  ⚠️  Reload failed: ${reloadErr.message}`);
-                        }
-                    }
-                }
-            }
-            if (!resultsFound) {
-                console.log(`  ✗ Skipping page ${currentPage} - results container not found after retries`);
-                // Debug: Check what's actually on the page
-                try {
-                    const pageTitle = await page.title();
-                    const pageUrl = page.url();
-                    console.log(`  🔍 Debug - Page title: "${pageTitle}", URL: ${pageUrl}`);
-                    
-                    // Check for common blocking indicators
-                    const pageContent = await page.content();
-                    const pageText = await page.evaluate(() => document.body?.innerText?.substring(0, 500) || "");
-                    
-                    if (pageContent.includes('captcha') || pageContent.includes('blocked') || pageText.includes('blocked')) {
-                        console.log(`  ⚠️  Page is blocked or showing captcha`);
-                        console.log(`  📄 Page preview: ${pageText.substring(0, 200)}...`);
-                        // Wait longer and try homepage again
-                        await sleep(10000);
-                        try {
-                            await page.goto("https://www.starnow.com", { waitUntil: "domcontentloaded", timeout: 30000 });
-                            await sleep(5000);
-                        } catch (e) {
-                            console.log(`  ⚠️  Homepage visit failed: ${e.message}`);
-                        }
-                    } else {
-                        // Check if selector exists but not visible
-                        const selectorExists = await page.evaluate(() => {
-                            return !!document.querySelector("#casting-results");
-                        });
-                        if (selectorExists) {
-                            console.log(`  ⚠️  Selector exists but not visible, might need more wait time`);
-                        } else {
-                            console.log(`  ⚠️  Selector #casting-results does not exist on page`);
-                        }
-                    }
-                } catch (debugErr) {
-                    console.log(`  ⚠️  Debug check failed: ${debugErr.message}`);
-                }
-                continue;
-            }
-            
-            // Check if main page is blocked
-            const mainPageContent = await page.content();
-            if (mainPageContent.includes('blocked') || mainPageContent.includes('Sorry, you have been blocked')) {
-                console.log(`  ⚠️  Main page blocked! Waiting 30 seconds and trying homepage again...`);
-                await sleep(30000);
-                
-                // Go back to homepage to re-establish session
-                try {
-                    await page.goto("https://www.starnow.com", { waitUntil: "domcontentloaded", timeout: 30000 });
-                    await sleep(5000);
-                    console.log(`  → Retrying page ${currentPage} after homepage visit...`);
-                    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
-                    await sleep(5000);
-                } catch (e) {
-                    console.log(`  ✗ Retry failed: ${e.message}`);
-                }
-                // Re-check listings
-                const retryListings = await page.$$eval(
-                    "#casting-results > div, #casting-results > article",
-                    (cards) => {
-                        const out = [];
-                        for (const card of cards) {
-                            const a = card.querySelector("a[href*='/casting/']");
-                            if (!a) continue;
-                            const link = a.href.split("?")[0];
-                            const rawTitle = a.innerText.trim();
-                            let location = "N/A";
-                            const locEl = card.querySelector(".prod-listing__details.submission-details div");
-                            if (locEl) location = locEl.innerText.trim();
-                            let posted = "N/A";
-                            const postedSpan = Array.from(card.querySelectorAll("span.tw-text-gray-dark")).find(
-                                (span) => span.textContent.includes("Posted:")
-                            );
-                            if (postedSpan) {
-                                const text = Array.from(postedSpan.childNodes)
-                                    .filter((n) => n.nodeType === Node.TEXT_NODE)
-                                    .map((n) => n.textContent.trim())
-                                    .join(" ");
-                                const match = text.match(/Posted:\s*(.+)/i);
-                                if (match) posted = match[1].trim();
-                            }
-                            out.push({ title: rawTitle, link, location, posted: posted || "N/A" });
-                        }
-                        const seen = new Set();
-                        return out.filter((x) => x.link && !seen.has(x.link) && seen.add(x.link));
-                    }
-                );
-                if (retryListings && retryListings.length > 0) {
-                    listings = retryListings;
-                    console.log(`✓ Got ${listings.length} listings after retry`);
-                } else {
-                    console.log(`✗ Still blocked, skipping page ${currentPage}`);
-                    continue;
-                }
-            }
-            
-            // Simulate human behavior: scroll and wait
-            try {
-                await page.evaluate(() => {
-                    window.scrollTo(0, document.body.scrollHeight / 3);
-                });
-                await sleep(1000 + Math.random() * 1000);
-                await page.evaluate(() => {
-                    window.scrollTo(0, document.body.scrollHeight / 2);
-                });
-                await sleep(1000 + Math.random() * 1000);
-            } catch (e) {
-                // Ignore scroll errors
-            }
-            
-            // Get cookies from main page to use in detail pages
-            const cookies = await context.cookies();
+            await page.goto(url, { waitUntil: "domcontentloaded", timeout: 90000 });
+            await sleep(1000 + Math.random() * 2000);
 
             const listings = await page.$$eval(
                 "#casting-results > div, #casting-results > article",
@@ -560,117 +194,15 @@ const WEBHOOK_URL =
                 }
             );
 
-            if (!listings || listings.length === 0) {
-                console.log(`⚠️  No listings found on page ${currentPage}. Retrying...`);
-                await sleep(3000);
-                // Retry once
-                const retryListings = await page.$$eval(
-                    "#casting-results > div, #casting-results > article",
-                    (cards) => {
-                        const out = [];
-                        for (const card of cards) {
-                            const a = card.querySelector("a[href*='/casting/']");
-                            if (!a) continue;
-                            const link = a.href.split("?")[0];
-                            const rawTitle = a.innerText.trim();
-                            let location = "N/A";
-                            const locEl = card.querySelector(".prod-listing__details.submission-details div");
-                            if (locEl) location = locEl.innerText.trim();
-                            let posted = "N/A";
-                            const postedSpan = Array.from(card.querySelectorAll("span.tw-text-gray-dark")).find(
-                                (span) => span.textContent.includes("Posted:")
-                            );
-                            if (postedSpan) {
-                                const text = Array.from(postedSpan.childNodes)
-                                    .filter((n) => n.nodeType === Node.TEXT_NODE)
-                                    .map((n) => n.textContent.trim())
-                                    .join(" ");
-                                const match = text.match(/Posted:\s*(.+)/i);
-                                if (match) posted = match[1].trim();
-                            }
-                            out.push({ title: rawTitle, link, location, posted: posted || "N/A" });
-                        }
-                        const seen = new Set();
-                        return out.filter((x) => x.link && !seen.has(x.link) && seen.add(x.link));
-                    }
-                );
-                if (retryListings && retryListings.length > 0) {
-                    listings = retryListings;
-                    console.log(`✓ Found ${listings.length} listings on retry for page ${currentPage}`);
-                } else {
-                    console.log(`✗ Still no listings found on page ${currentPage}. Skipping...`);
-                    continue;
-                }
-            } else {
-                console.log(`Found ${listings.length} listings on page ${currentPage}`);
-            }
+            console.log(`Found ${listings.length} listings on page ${currentPage}`);
 
             for (let i = 0; i < listings.length; i++) {
                 const item = listings[i];
                 const detailPage = await context.newPage();
-                
-                // Set cookies from main page to maintain session
-                if (cookies && cookies.length > 0) {
-                    try {
-                        await detailPage.context().addCookies(cookies);
-                    } catch (e) {
-                        // Cookies might already be set, ignore
-                    }
-                }
 
                 try {
-                    console.log(`  → Scraping detail ${i + 1}/${listings.length}: ${item.link.substring(0, 60)}...`);
-                    
-                    // Random delay between requests to avoid detection (longer delays)
-                    if (i > 0) {
-                        const delay = IS_HEADLESS ? 5000 + Math.random() * 5000 : 3000 + Math.random() * 4000;
-                        console.log(`  ⏳ Waiting ${Math.round(delay/1000)}s before next request...`);
-                        await sleep(delay);
-                    }
-                    
-                    await detailPage.goto(item.link, { waitUntil: "domcontentloaded", timeout: 30000 });
-                    // Longer wait for Linux/EC2 to ensure content loads
-                    await sleep(IS_HEADLESS ? 5000 + Math.random() * 3000 : 3000 + Math.random() * 2000);
-                    
-                    // Check if blocked
-                    const pageContent = await detailPage.content();
-                    if (pageContent.includes('blocked') || pageContent.includes('Sorry, you have been blocked')) {
-                        console.log(`  ⚠️  Page blocked detected, waiting 15 seconds and retrying...`);
-                        await sleep(15000);
-                        await detailPage.reload({ waitUntil: "domcontentloaded", timeout: 30000 });
-                        await sleep(5000);
-                        
-                        // Check again
-                        const retryContent = await detailPage.content();
-                        if (retryContent.includes('blocked') || retryContent.includes('Sorry, you have been blocked')) {
-                            console.log(`  ✗ Still blocked after retry, skipping this detail page`);
-                            await detailPage.close();
-                            continue;
-                        }
-                    }
-
-                    // Wait for main content to be visible with multiple selectors
-                    let contentLoaded = false;
-                    const contentSelectors = [
-                        ".prod-listing__header",
-                        ".prod-listing__details",
-                        "h1",
-                        "[data-testid='project-title']",
-                        ".project-title"
-                    ];
-                    for (const selector of contentSelectors) {
-                        try {
-                            await detailPage.waitForSelector(selector, { timeout: 8000, state: 'visible' });
-                            contentLoaded = true;
-                            break;
-                        } catch (e) {
-                            // Try next selector
-                        }
-                    }
-                    if (!contentLoaded) {
-                        console.log(`  ⚠️  Main content not found for ${item.link}, trying anyway...`);
-                    }
-                    await sleep(IS_HEADLESS ? 2000 : 1500); // Extra wait for content to render
+                    await detailPage.goto(item.link, { waitUntil: "domcontentloaded", timeout: 45000 });
+                    await sleep(1500);
 
                     // Expand role dropdowns
                     try {
@@ -678,11 +210,10 @@ const WEBHOOK_URL =
                         for (const dd of dropdowns) {
                             await dd.scrollIntoViewIfNeeded();
                             await dd.click();
-                            await sleep(500);
+                            await sleep(300);
                         }
-                        await sleep(1000); // Wait after expanding dropdowns
                     } catch (e) {
-                        // Dropdowns might not exist, that's okay
+                        console.log("Dropdown click error:", e.message);
                     }
 
                     const detail = await detailPage.evaluate(() => {
@@ -693,23 +224,8 @@ const WEBHOOK_URL =
                                 .replace(/\s+/g, " ")
                                 .trim();
 
-                        // Try multiple selectors for project name
-                        let projectName = "";
-                        const titleSelectors = [
-                            ".prod-listing__header h1",
-                            "h1.prod-listing__header",
-                            ".prod-listing__header h1.title",
-                            "h1",
-                            ".project-title",
-                            "[data-testid='project-title']"
-                        ];
-                        for (const selector of titleSelectors) {
-                            const el = document.querySelector(selector);
-                            if (el && el.innerText) {
-                                projectName = norm(el.innerText);
-                                if (projectName) break;
-                            }
-                        }
+                        const projectName =
+                            norm(document.querySelector(".prod-listing__header h1")?.innerText || "");
 
                         let location = "N/A";
                         const locEl = document.querySelector(".prod-listing__details.submission-details div");
@@ -916,16 +432,13 @@ const WEBHOOK_URL =
                     });
 
                     // log quick debug to console (one line)
-                    if (!detail.projectName || !detail._debug_candidates || detail._debug_candidates.length === 0) {
-                        console.log("DEBUG:", {
-                            url: item.link,
-                            title: detail.projectName || "EMPTY",
-                            raw_candidates: detail._debug_candidates || [],
-                            parsed_date: detail.shoot_date,
-                            parsed_location: detail.shoot_location,
-                            roles_count: detail.roles?.length || 0,
-                        });
-                    }
+                    console.log("DEBUG:", {
+                        url: item.link,
+                        title: detail.projectName,
+                        raw_candidates: detail._debug_candidates,
+                        parsed_date: detail.shoot_date,
+                        parsed_location: detail.shoot_location,
+                    });
 
                     // Fetch pay from role URLs if missing
                     for (let j = 0; j < detail.roles.length; j++) {
